@@ -1,0 +1,72 @@
+# Alyssa: uygulama + deniz veri hattı. Ana dala her yayında ve 6 saatte bir çalışır; siteyi GitHub Pages'e (GitHub Actions kaynağıyla) koyar.
+# Gerekli Secrets: COPERNICUSMARINE_SERVICE_USERNAME, COPERNICUSMARINE_SERVICE_PASSWORD (Settings > Secrets and variables > Actions)
+# Gerekli ayar: Settings > Pages > Build and deployment > Source: GitHub Actions
+name: site-ve-deniz
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Paketler
+        run: pip install -q copernicusmarine numpy xarray rasterio
+      - name: Derinlik önbelleği
+        uses: actions/cache@v4
+        with:
+          path: .cache/deniz
+          key: bati-v1-${{ hashFiles('hatti/bolgeler.json') }}
+      - name: Son deniz verisi (yedek)
+        uses: actions/cache/restore@v4
+        with:
+          path: _last/deniz
+          key: deniz-last-${{ github.run_id }}
+          restore-keys: deniz-last-
+      - name: Deniz verisi
+        id: deniz
+        continue-on-error: true
+        env:
+          COPERNICUSMARINE_SERVICE_USERNAME: ${{ secrets.COPERNICUSMARINE_SERVICE_USERNAME }}
+          COPERNICUSMARINE_SERVICE_PASSWORD: ${{ secrets.COPERNICUSMARINE_SERVICE_PASSWORD }}
+        run: |
+          if [ -z "$COPERNICUSMARINE_SERVICE_USERNAME" ]; then echo "Copernicus bilgileri yok; deniz verisi atlandı"; exit 1; fi
+          python3 hatti/deniz.py --out _new/deniz/v1 --cache .cache/deniz
+      - name: Siteyi hazırla
+        run: |
+          mkdir -p _site
+          rsync -a --exclude '.git' --exclude '.github' --exclude 'hatti' --exclude '_site' --exclude '_new' --exclude '_last' --exclude '.cache' ./ _site/
+          if [ -f _new/deniz/v1/index.json ]; then mkdir -p _site/deniz && cp -r _new/deniz/v1 _site/deniz/; rm -rf _last/deniz && mkdir -p _last && cp -r _new/deniz _last/;
+          elif [ -d _last/deniz/v1 ]; then mkdir -p _site/deniz && cp -r _last/deniz/v1 _site/deniz/; echo "yeni veri yok; son veri kullanıldı"; fi
+      - name: Son deniz verisini sakla
+        if: steps.deniz.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: _last/deniz
+          key: deniz-last-${{ github.run_id }}
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.d.outputs.page_url }}
+    steps:
+      - id: d
+        uses: actions/deploy-pages@v4
