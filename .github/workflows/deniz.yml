@@ -17,11 +17,11 @@ concurrency:
   cancel-in-progress: false
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       - name: Paketler
@@ -46,6 +46,9 @@ jobs:
         run: |
           if [ -z "$COPERNICUSMARINE_SERVICE_USERNAME" ]; then echo "Copernicus bilgileri yok; deniz verisi atlandı"; exit 1; fi
           python3 hatti/deniz.py --out _new/deniz/v1 --cache .cache/deniz
+      - name: Gelgit doğrulaması
+        continue-on-error: true
+        run: python3 hatti/gelgit_dogrula.py --out _new/deniz/v1
       - name: Siteyi hazırla
         run: |
           mkdir -p _site
@@ -63,7 +66,7 @@ jobs:
           path: _site
   deploy:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment:
       name: github-pages
       url: ${{ steps.d.outputs.page_url }}

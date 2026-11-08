@@ -83,7 +83,7 @@ def pick_datasets(product_id):
     log('veri setleri:', ', '.join(sorted(found)))
 
     def best(var, prefs):
-        cands = [d for d, vs in found.items() if var in vs]
+        cands = [d for d, vs in found.items() if var in vs and 'detided' not in d]
         for pat in prefs:
             for d in cands:
                 if all(x in d for x in pat):
@@ -91,8 +91,8 @@ def pick_datasets(product_id):
         return cands[0] if cands else None
     return {
         'temp': best('thetao', [('P1D',), ('PT1H',)]),
-        'cur': best('uo', [('3D', 'PT1H'), ('PT1H',), ('P1D',)]),
-        'zos': best('zos', [('PT1H',), ('PT15M',), ('P1D',)]),
+        'cur': best('uo', [('3D', 'PT1H'), ('PT6H',), ('PT1H',), ('P1D',)]),   # MED: 3B saatlik · GLO: 3B 6 saatlik
+        'zos': best('zos', [('ssh', '2D_PT1H'), ('PT1H',), ('PT15M',)]),   # 'detided' (gelgitsiz) seçilmez
     }
 
 
@@ -244,12 +244,15 @@ def run(args):
                 try:
                     bati = bathy_emodnet(reg['bbox'], Path(args.cache))
                 except Exception as e:
-                    log('derinlik alınamadı:', e)
+                    log('derinlik alınamadı:', e); print('::warning title=Derinlik %s::%s' % (reg['id'], repr(e)[:300]), flush=True)
             tiles = write_region(reg, dsets, out, bati)
-            index['regions'].append({'id': reg['id'], 'bbox': reg['bbox'], 'tile': reg.get('tile', 0.5), 'tiles': tiles, 'src': ids, 'bati': bool(bati)})
+            index['regions'].append({'id': reg['id'], 'bbox': reg['bbox'], 'tile': reg.get('tile', 0.5), 'tiles': tiles, 'src': ids, 'bati': bool(bati), 'zos_tide': 'MEDSEA' in reg['phy']})
             log(reg['id'], len(tiles), 'döşeme')
+            info = ' · '.join('%s=%s %s' % (k, ids.get(k), dict(d.sizes) if d is not None else '-') for k, d in dsets.items())
+            print('::notice title=Deniz %s::%d döşeme · %s · derinlik %s' % (reg['id'], len(tiles), info, 'var' if bati else 'yok'), flush=True)
         except Exception as e:
             log('HATA', reg['id'], repr(e))
+            print('::warning title=Deniz %s::%s' % (reg['id'], repr(e)[:300]), flush=True)
     (out / 'index.json').write_text(json.dumps(index, separators=(',', ':')))
     log('bitti', sum(len(r['tiles']) for r in index['regions']), 'döşeme')
     return 0 if index['regions'] else 1
