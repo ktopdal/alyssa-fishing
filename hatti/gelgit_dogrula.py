@@ -19,6 +19,7 @@ ST = [  # TUDES genlikleri: HGM 2003 Ek-C / Ocean Science 2022 (ChatGPT araştı
     {'k': 'tudes-bodrum-ii', 'n': 'Bodrum-II', 'lat': 37.03218, 'lon': 27.42346, 'amp': {'M2': 4.067, 'S2': 2.6577, 'K1': 1.9855, 'O1': 0.9704}},
     {'k': 'tudes-antalya-ii', 'n': 'Antalya-II', 'lat': 36.83042, 'lon': 30.60868, 'amp': {'M2': 7.1584, 'S2': 4.2613, 'K1': 1.9862, 'O1': 1.1225}},
     {'k': 'tudes-erdek', 'n': 'Erdek', 'lat': 40.38988, 'lon': 27.84518, 'amp': {'M2': 0.4855, 'S2': 0.29, 'K1': 1.168, 'O1': 0.7906}},
+    {'k': 'tudes-gokceada', 'n': 'Gökçeada', 'lat': 40.23171, 'lon': 25.89349, 'amp': {'M2': 6.58, 'S2': 4.92, 'K1': 2.10, 'O1': 0.96}},   # Alpar ve Yüce 1998, 1994 geçici mareograf (2B)
     {'k': '8724580', 'n': 'Key West, FL', 'lat': 24.5557, 'lon': -81.8079, 'noaa': True},
     {'k': '8771450', 'n': 'Galveston Pier 21, TX', 'lat': 29.3100, 'lon': -94.7933, 'noaa': True},
     {'k': '9414290', 'n': 'San Francisco, CA', 'lat': 37.806305, 'lon': -122.46589, 'noaa': True},
@@ -153,10 +154,7 @@ def noaa_pred(sid, d0, d1):
 # ---- ABD: NOAA CO-OPS resmî gelgit tahmini (uygulama NOAA'ya doğrudan erişemediği için hat indirir); 30 km içindeki konumda bu gösterilir
 # İstasyon kimlikleri: doğrulama istasyonları + balıkçılığın yoğun olduğu kıyılar (ChatGPT 2B listesi gelince genişler). Ad ve konum NOAA'nın kendi
 # istasyon kaydından (mdapi) alınır.
-NOAA_IDS = ['8724580', '8771450', '9414290', '8443970', '8638610',
-            '8723214', '8722670', '8721604', '8720030', '8725110', '8726724', '8726520', '8729840', '8735180', '8761724', '8775870',
-            '8651370', '8658163', '8665530', '8670870', '8534720', '8518750', '8452660', '8410140', '8574680',
-            '9410170', '9410660', '9447130']
+NOAA_IDS = ['8724580', '8771450', '9414290', '8443970', '8638610', '8723214', '8722670', '8721604', '8720030', '8725110', '8726724', '8726520', '8729840', '8735180', '8761724', '8775870', '8651370', '8658163', '8665530', '8670870', '8534720', '8518750', '8452660', '8410140', '8574680', '9410170', '9410660', '9447130', '8725520', '8720218', '8775237', '8779770', '8764227', '8768094', '8656483', '8661070', '8575512', '8577330', '8454000', '8418150', '9410230', '9443090', '9439040']   # + ChatGPT 2B listesi (9 Kasım)
 
 
 def noaa_meta(sid):

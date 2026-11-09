@@ -9,6 +9,8 @@ tek bir dosyayla okuyabileceği küçük döşemelere (0,5° x 0,5°) yazar:
   bati : derinlik ve eğim (EMODnet; bir kez hesaplanır, önbellekte tutulur)
   fr   : yüzey sıcaklık cephesi (günlük; °C/km, sıcaklığın yatay eğimi, Belkin–O'Reilly benzeri yumuşatma) (v0.39.7)
   chl  : yüzey klorofili (günlük; mg/m³, BGC modeli; kendi ızgarasında, log10 ile saklanır) (v0.39.7)
+  v0.39.8 (ChatGPT 3B): uydu L4 (bulutsuz) son gün: chl (uydu klorofili, varsa modelin yerine), frs (uydu SST cephesi °C/km),
+         frc (klorofil cephesi, log10(mg/m³)/km). Belkin–O'Reilly: 3x3 medyan süzgeç + merkezî fark. Hepsi kendi ızgarasında.
 
 Kimlik bilgileri yalnız ortam değişkenlerinden gelir (GitHub Secrets):
   COPERNICUSMARINE_SERVICE_USERNAME, COPERNICUSMARINE_SERVICE_PASSWORD
@@ -138,6 +140,69 @@ def front_field(sst, la, lo):
     return np.hypot(gx, gy)
 
 
+def grid_block(a, CLA, CLO, tt, la, lo, ts, scale):
+    """kendi ızgarasında döşeme bloğu: a (t, y, x) zaten dönüştürülmüş; int16 x scale"""
+    iy = np.where((CLA >= la - 1e-6) & (CLA < la + ts - 1e-6))[0]; ix = np.where((CLO >= lo - 1e-6) & (CLO < lo + ts - 1e-6))[0]
+    if not len(iy) or not len(ix):
+        return None
+    b = a[:, iy[0]:iy[-1] + 1, ix[0]:ix[-1] + 1]
+    if not np.isfinite(b).any():
+        return None
+    return {'lat0': round(float(CLA[iy[0]]), 5), 'lon0': round(float(CLO[ix[0]]), 5), 'dlat': round(float(CLA[1] - CLA[0]), 6), 'dlon': round(float(CLO[1] - CLO[0]), 6),
+            'ny': int(b.shape[1]), 'nx': int(b.shape[2]), 't0': ms(tt[0]), 'dt': ms(tt[1]) - ms(tt[0]) if len(tt) > 1 else 86400000, 'nt': int(b.shape[0]), 's': scale, 'd': b64i16(b, scale)}
+
+
+def median3(a):
+    """3x3 medyan süzgeç (t, y, x), eksik hücreler atlanır"""
+    import warnings
+    pad = np.pad(np.asarray(a, dtype=float), ((0, 0), (1, 1), (1, 1)), constant_values=np.nan)
+    st = np.stack([pad[:, 1 + dy:pad.shape[1] - 1 + dy, 1 + dx:pad.shape[2] - 1 + dx] for dy in (-1, 0, 1) for dx in (-1, 0, 1)])
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', RuntimeWarning); m = np.nanmedian(st, axis=0)
+    m[~np.isfinite(a)] = np.nan
+    return m
+
+
+def grad_km(a, la, lo):
+    """yatay eğim büyüklüğü (birim/km), merkezî fark; kenar ve eksik komşuda NaN"""
+    dy_km = abs(float(la[1] - la[0])) * 111.2
+    dx_km = abs(float(lo[1] - lo[0])) * 111.2 * np.cos(np.radians(la))[None, :, None]
+    gy = np.full_like(a, np.nan); gx = np.full_like(a, np.nan)
+    gy[:, 1:-1, :] = (a[:, 2:, :] - a[:, :-2, :]) / (2 * dy_km)
+    gx[:, :, 1:-1] = (a[:, :, 2:] - a[:, :, :-2]) / (2 * dx_km)
+    return np.hypot(gx, gy)
+
+
+def sat_latest(d, var):
+    """uydu L4: geçerli verisi olan son gün (t=1), alan ve zaman"""
+    a = d[var].values
+    a = a[:, 0] if a.ndim == 4 else a
+    ok = [i for i in range(a.shape[0]) if np.isfinite(a[i]).mean() > 0.05]
+    if not ok:
+        return None, None
+    i = ok[-1]
+    return a[i:i + 1].astype(float), d['time'].values[i:i + 1]
+
+
+def sat_fields(sst_ds, chl_ds):
+    """uydu alanları -> {'chl': (log10, lat, lon, t), 'frs': (°C/km, ...), 'frc': (log10/km, ...)}"""
+    out = {}
+    if chl_ds is not None:
+        a, t = sat_latest(chl_ds, 'CHL' if 'CHL' in chl_ds else 'chl')
+        if a is not None:
+            la, lo = coords(chl_ds)
+            with np.errstate(all='ignore'):
+                lg = np.log10(np.clip(a, 1e-3, 100))
+            out['chl'] = (lg, la, lo, t)
+            out['frc'] = (grad_km(median3(lg), la, lo), la, lo, t)
+    if sst_ds is not None:
+        a, t = sat_latest(sst_ds, 'analysed_sst')
+        if a is not None:
+            la, lo = coords(sst_ds)
+            out['frs'] = (grad_km(median3(a), la, lo), la, lo, t)     # K ve °C farkı aynı
+    return out
+
+
 def chl_block(d, la, lo, ts):
     """klorofil döşemesi: kendi ızgarası (BGC ızgarası fizik ızgarasından farklı olabilir), log10(mg/m³) x 1000"""
     CLA, CLO = coords(d)
@@ -157,7 +222,7 @@ def chl_block(d, la, lo, ts):
             't0': ms(t[0]), 'dt': ms(t[1]) - ms(t[0]) if len(t) > 1 else 86400000, 'nt': int(a.shape[0]), 's': 0.001, 'd': b64i16(lg, 0.001)}
 
 
-def write_region(reg, dsets, out, bati=None):
+def write_region(reg, dsets, out, bati=None, sat=None):
     """dsets: {'temp': xr.Dataset|None, 'cur': ..., 'zos': ...} zaten kutuya kesilmiş. bati: {'lat','lon','z','slope'} ya da None"""
     ts = reg.get('tile', 0.5)
     rdir = out / reg['id']; rdir.mkdir(parents=True, exist_ok=True)
@@ -217,6 +282,14 @@ def write_region(reg, dsets, out, bati=None):
             c = chl_block(dsets['chl'], la, lo, ts)
             if c:
                 rec['chl'] = c; rec['src']['chl'] = reg['_ids'].get('chl')
+        for k, (a, CLA, CLO, tt) in (sat or {}).items():
+            b = grid_block(a, CLA, CLO, tt, la, lo, ts, 0.001)
+            if b:
+                b['sat'] = 1
+                if k == 'chl':
+                    rec['chl'] = b; rec['src']['chl'] = reg.get('sat_chl')
+                else:
+                    rec[k] = b; rec['src'][k] = reg.get('sat_sst') if k == 'frs' else reg.get('sat_chl')
         if bati is not None:
             by = np.where((bati['lat'] >= la - 1e-6) & (bati['lat'] < la + ts - 1e-6))[0]
             bx = np.where((bati['lon'] >= lo - 1e-6) & (bati['lon'] < lo + ts - 1e-6))[0]
@@ -297,13 +370,31 @@ def run(args):
                 if d is not None:
                     dsets[k] = d.load()
                     log(k, dict(d.sizes))
+            sat = {}
+            if reg.get('sat_chl') or reg.get('sat_sst'):
+                ts0 = (now - dt.timedelta(days=5)).strftime('%Y-%m-%dT%H:%M:%S'); ts1 = now.strftime('%Y-%m-%dT%H:%M:%S')
+                sd = {}
+                for key, var in (('sat_chl', ['CHL']), ('sat_sst', ['analysed_sst'])):
+                    if not reg.get(key):
+                        continue
+                    try:
+                        sd[key] = open_sub(reg[key], var, bb, ts0, ts1).load(); log(key, dict(sd[key].sizes))
+                    except Exception as e:
+                        log(key, 'alınamadı:', e); print('::warning title=Uydu %s %s::%s' % (reg['id'], key, repr(e)[:300]), flush=True)
+                try:
+                    sat = sat_fields(sd.get('sat_sst'), sd.get('sat_chl'))
+                except Exception as e:
+                    print('::warning title=Uydu cephe %s::%s' % (reg['id'], repr(e)[:300]), flush=True)
+                for k, v in sat.items():
+                    g = v[0][np.isfinite(v[0])]
+                    print('::notice title=Uydu %s %s::%s · %s hücre · P90 %.3f' % (reg['id'], k, str(v[3][0])[:10], g.size, float(np.percentile(g, 90)) if g.size else float('nan')), flush=True)
             bati = None
             if reg.get('bati') == 'emodnet' and not args.no_bati:
                 try:
                     bati = bathy_emodnet(reg['bbox'], Path(args.cache))
                 except Exception as e:
                     log('derinlik alınamadı:', e); print('::warning title=Derinlik %s::%s' % (reg['id'], repr(e)[:300]), flush=True)
-            tiles = write_region(reg, dsets, out, bati)
+            tiles = write_region(reg, dsets, out, bati, sat)
             index['regions'].append({'id': reg['id'], 'bbox': reg['bbox'], 'tile': reg.get('tile', 0.5), 'tiles': tiles, 'src': ids, 'bati': bool(bati), 'zos_tide': 'MEDSEA' in reg['phy']})
             log(reg['id'], len(tiles), 'döşeme')
             info = ' · '.join('%s=%s %s' % (k, ids.get(k), dict(d.sizes) if d is not None else '-') for k, d in dsets.items())
@@ -338,7 +429,11 @@ def selftest():
                      coords={'time': tt, 'depth': [0.5], 'latitude': clat, 'longitude': clon})
     reg = {'id': 'test', 'bbox': [26.0, 37.8, 27.0, 38.8], 'tile': 0.5, '_ids': {'temp': 'T', 'cur': 'C', 'zos': 'Z', 'chl': 'B'}}
     with tempfile.TemporaryDirectory() as d:
-        tiles = write_region(reg, {'temp': temp, 'cur': cur, 'zos': zos, 'chl': chl}, Path(d))
+        slat = np.arange(37.80, 38.80, 0.01); slon = np.arange(26.0, 27.0, 0.01)
+        sst = xr.Dataset({'analysed_sst': (('time', 'latitude', 'longitude'), 293.0 + np.where(slon[None, None, :] >= 26.7, 0.5, 0.0) + np.zeros((3, len(slat), len(slon))))},
+                         coords={'time': tt, 'latitude': slat, 'longitude': slon})
+        sat = sat_fields(sst, None)
+        tiles = write_region(reg, {'temp': temp, 'cur': cur, 'zos': zos, 'chl': chl}, Path(d), None, sat)
         f = json.loads((Path(d) / 'test' / (tiles[0] + '.json')).read_text())
         a = np.frombuffer(base64.b64decode(f['temp']['d']), '<i2').reshape(f['temp']['nt'], len(f['temp']['z']), len(f['lat']), len(f['lon']))
         assert a[0, 0, 0, 0] == NA and abs(a[0, 0, -1, -1] * 0.01 - 19.95) < 0.02, a[0, 0, -1, -1]
@@ -348,6 +443,9 @@ def selftest():
         assert fr[0, 5, 0] * 0.001 > 0.05 and fr[0, 5, 6] * 0.001 < 0.01, (fr[0, 5, :8])
         cl = np.frombuffer(base64.b64decode(g['chl']['d']), '<i2')
         assert abs(10 ** (cl[0] * 0.001) - 0.2) < 0.01 and g['chl']['nt'] == 3, cl[:3]
+        frs = np.frombuffer(base64.b64decode(g['frs']['d']), '<i2').reshape(g['frs']['ny'], g['frs']['nx'])
+        assert g['frs']['nt'] == 1 and frs.max() * 0.001 > 0.15, frs.max()
+        print('uydu cephe en yüksek %.3f °C/km' % (frs.max() * 0.001))
         print('cephe en yüksek %.3f °C/km · klorofil %.2f mg/m³' % (fr[0].max() * 0.001, 10 ** (cl[0] * 0.001)))
         print('selftest ok:', tiles, 'temp z', f['temp']['z'], 'boyut', sum((Path(d) / 'test' / (t + '.json')).stat().st_size for t in tiles), 'bayt')
 
