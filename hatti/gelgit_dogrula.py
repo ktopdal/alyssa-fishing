@@ -52,25 +52,82 @@ def om_series(lat, lon):
     return None, None, None
 
 
+# ---- astronomik argümanlar ve düğüm (18,6 yıl) düzeltmesi (Schureman; uygulamadaki 31t-gelgit.js ile aynı)
+# V: denge argümanı (derece), f/u: düğüm genlik çarpanı ve faz düzeltmesi. K2 ve P1, 92 günlük kayıtta S2 ve K1'den ayrılamaz
+# (ayırmak için 183 gün gerekir); denge oranıyla türetilir: K2 = 0,27·S2, P1 = 0,33·K1, fazları eş (Greenwich).
+J2000 = dt.datetime(2000, 1, 1, 12, tzinfo=dt.timezone.utc).timestamp()
+D2R = math.pi / 180
+
+
+def astro(t):
+    D = (np.asarray(t, dtype=float) - J2000) / 86400
+    s = 218.3165 + 13.17639648 * D; h = 280.4661 + 0.98564736 * D; p = 83.3532 + 0.11140353 * D; N = (125.0445 - 0.05295377 * D) * D2R
+    T = 180 + 15 * ((np.asarray(t, dtype=float) / 3600) % 24)
+    return s, h, p, N, T
+
+
+def vfu(n, t):
+    s, h, p, N, T = astro(t)
+    c1, c2, c3, s1, s2, s3 = np.cos(N), np.cos(2 * N), np.cos(3 * N), np.sin(N), np.sin(2 * N), np.sin(3 * N)
+    fM2 = 1.0004 - 0.0373 * c1 + 0.0002 * c2; uM2 = -2.14 * s1
+    fO1 = 1.0089 + 0.1871 * c1 - 0.0147 * c2 + 0.0014 * c3; uO1 = 10.80 * s1 - 1.34 * s2 + 0.19 * s3
+    fK1 = 1.0060 + 0.1150 * c1 - 0.0088 * c2 + 0.0006 * c3; uK1 = -8.86 * s1 + 0.68 * s2 - 0.07 * s3
+    fK2 = 1.0241 + 0.2863 * c1 + 0.0083 * c2 - 0.0015 * c3; uK2 = -17.74 * s1 + 0.68 * s2 - 0.04 * s3
+    one, zero = np.ones_like(s), np.zeros_like(s)
+    V, f, u = {
+        'M2': (2 * T - 2 * s + 2 * h, fM2, uM2), 'S2': (2 * T, one, zero), 'N2': (2 * T - 3 * s + 2 * h + p, fM2, uM2),
+        'K2': (2 * T + 2 * h, fK2, uK2), 'K1': (T + h - 90, fK1, uK1), 'O1': (T - 2 * s + h + 90, fO1, uO1),
+        'P1': (T - h + 90, one, zero), 'Q1': (T - 3 * s + h + p + 90, fO1, uO1), 'M4': (4 * T - 4 * s + 4 * h, fM2 ** 2, 2 * uM2)}[n]
+    return (V + u) * D2R, f
+
+
+INFER = {'S2': ('K2', 0.27), 'K1': ('P1', 0.33)}
+
+
+def basis(n, t):
+    X, f = vfu(n, t); bc, bs = f * np.cos(X), f * np.sin(X)
+    if n in INFER:
+        m, r = INFER[n]; X2, f2 = vfu(m, t); bc = bc + r * f2 * np.cos(X2); bs = bs + r * f2 * np.sin(X2)
+    return bc, bs
+
+
 def fit(t, v):
     days = (t[-1] - t[0]) / 86400
-    cs = [(n, w * math.pi / 180) for n, w, d in C if days >= d]
-    h = (t - T0) / 3600
-    cols = [np.ones_like(h)]
-    for _, w in cs:
-        cols += [np.cos(w * h), np.sin(w * h)]
+    cs = [n for n, w, d in C if days >= d]
+    cols = [np.ones_like(t, dtype=float)]
+    for n in cs:
+        cols += list(basis(n, t))
     A = np.vstack(cols).T
     x, *_ = np.linalg.lstsq(A, v, rcond=None)
-    comp = {n: {'a': x[1 + 2 * i], 'b': x[2 + 2 * i], 'w': w, 'amp': math.hypot(x[1 + 2 * i], x[2 + 2 * i])} for i, (n, w) in enumerate(cs)}
+    comp = {n: {'a': x[1 + 2 * i], 'b': x[2 + 2 * i], 'amp': math.hypot(x[1 + 2 * i], x[2 + 2 * i]),
+                'g': math.degrees(math.atan2(x[2 + 2 * i], x[1 + 2 * i])) % 360} for i, n in enumerate(cs)}
     return {'z0': x[0], 'C': comp, 'days': days}
 
 
 def pred(F, t):
-    h = (np.asarray(t) - T0) / 3600
-    v = np.full_like(h, F['z0'], dtype=float)
-    for c in F['C'].values():
-        v += c['a'] * np.cos(c['w'] * h) + c['b'] * np.sin(c['w'] * h)
+    t = np.asarray(t, dtype=float)
+    v = np.full_like(t, F['z0'], dtype=float)
+    for n, c in F['C'].items():
+        bc, bs = basis(n, t); v += c['a'] * bc + c['b'] * bs
     return v
+
+
+def selftest():
+    """Yapay seri: 8 bileşen (K2, P1 dahil) + düğüm etkisi; 99 günlük uyum, 3 gün ileri tahmin hatası."""
+    rng = np.random.default_rng(1)
+    t = np.arange(dt.datetime(2026, 8, 1, tzinfo=dt.timezone.utc).timestamp(), dt.datetime(2026, 11, 8, tzinfo=dt.timezone.utc).timestamp(), 3600.0)
+    tru = {'M2': (0.60, 40), 'S2': (0.25, 70), 'N2': (0.12, 20), 'K2': (0.068, 70), 'K1': (0.30, 150), 'O1': (0.20, 130), 'P1': (0.10, 150), 'Q1': (0.04, 120), 'M4': (0.02, 10)}
+    def truth(tt):
+        y = np.zeros_like(tt)
+        for n, (H, g) in tru.items():
+            X, f = vfu(n, tt); y += f * H * np.cos(X - g * D2R)
+        return y
+    F = fit(t, truth(t) + rng.normal(0, 0.03, t.size))
+    tf = np.arange(t[-1], t[-1] + 3 * 86400, 360.0)
+    e = float(np.sqrt(np.mean((pred(F, tf) - truth(tf)) ** 2)))
+    print('selftest: 3 gün ileri RMSE %.1f cm (aralık %.0f cm); M2 %.3f/%.0f° S2 %.3f/%.0f° K1 %.3f/%.0f°' % (e * 100, np.ptp(truth(tf)) * 100,
+          F['C']['M2']['amp'], F['C']['M2']['g'], F['C']['S2']['amp'], F['C']['S2']['g'], F['C']['K1']['amp'], F['C']['K1']['g']))
+    return e
 
 
 def extrema(t, v):
@@ -93,8 +150,63 @@ def noaa_pred(sid, d0, d1):
     return t, v
 
 
+# ---- ABD: NOAA CO-OPS resmî gelgit tahmini (uygulama NOAA'ya doğrudan erişemediği için hat indirir); 30 km içindeki konumda bu gösterilir
+# İstasyon kimlikleri: doğrulama istasyonları + balıkçılığın yoğun olduğu kıyılar (ChatGPT 2B listesi gelince genişler). Ad ve konum NOAA'nın kendi
+# istasyon kaydından (mdapi) alınır.
+NOAA_IDS = ['8724580', '8771450', '9414290', '8443970', '8638610',
+            '8723214', '8722670', '8721604', '8720030', '8725110', '8726724', '8726520', '8729840', '8735180', '8761724', '8775870',
+            '8651370', '8658163', '8665530', '8670870', '8534720', '8518750', '8452660', '8410140', '8574680',
+            '9410170', '9410660', '9447130']
+
+
+def noaa_meta(sid):
+    j = get('https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations/%s.json' % sid)
+    s = (j.get('stations') or [{}])[0]
+    return {'id': sid, 'n': s.get('name') or sid, 'state': s.get('state') or '', 'lat': round(float(s['lat']), 5), 'lon': round(float(s['lng']), 5)}
+
+
+def noaa_get(sid, d0, d1, interval):
+    u = ('https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?product=predictions&application=alyssa_wf&begin_date=%s&end_date=%s'
+         '&datum=MSL&station=%s&time_zone=gmt&units=metric&interval=%s&format=json') % (d0.strftime('%Y%m%d'), d1.strftime('%Y%m%d'), sid, interval)
+    return get(u).get('predictions') or []
+
+
+def ts(x):
+    return dt.datetime.strptime(x, '%Y-%m-%d %H:%M').replace(tzinfo=dt.timezone.utc).timestamp()
+
+
+def noaa_pack(meta, hourly, hilo):
+    t = [ts(x['t']) for x in hourly]; v = [round(float(x['v']) * 1000) for x in hourly]
+    if len(t) < 48 or any(abs(b - a - 3600) > 1 for a, b in zip(t, t[1:])):
+        raise ValueError('saatlik seri eksik')
+    hl = [[int(ts(x['t']) * 1000), 'H' if x.get('type', '').upper().startswith('H') else 'L', round(float(x['v']) * 1000)] for x in hilo]
+    return dict(meta, t0=int(t[0] * 1000), v=v, hl=hl)
+
+
+def noaa_export(out, now):
+    d0 = (now - dt.timedelta(days=1)).date(); d1 = d0 + dt.timedelta(days=18)
+    st, bad = [], []
+    for sid in NOAA_IDS:
+        try:
+            st.append(noaa_pack(noaa_meta(sid), noaa_get(sid, d0, d1, 'h'), noaa_get(sid, d0, d1, 'hilo')))
+        except Exception as e:
+            bad.append(sid); print('::warning title=NOAA %s::%s' % (sid, repr(e)[:160]))
+    (out / 'noaa.json').write_text(json.dumps({'gen': now.strftime('%Y-%m-%dT%H:%MZ'), 'datum': 'MSL', 'st': st}, ensure_ascii=False, separators=(',', ':')))
+    print('::notice title=NOAA gelgit tahmini::%d istasyon yazıldı (%d hata) · %s – %s' % (len(st), len(bad), d0, d1))
+
+
+def noaa_selftest():
+    h = [{'t': (dt.datetime(2026, 11, 9) + dt.timedelta(hours=i)).strftime('%Y-%m-%d %H:%M'), 'v': '%.3f' % (0.5 * math.cos(i * 0.5))} for i in range(60)]
+    p = noaa_pack({'id': 'x', 'n': 'x', 'state': '', 'lat': 1, 'lon': 2}, h, [{'t': '2026-11-09 06:12', 'v': '0.501', 'type': 'H'}, {'t': '2026-11-09 12:30', 'v': '-0.4', 'type': 'L'}])
+    assert p['v'][0] == 500 and p['hl'][0][1] == 'H' and p['hl'][1][2] == -400 and len(p['v']) == 60
+    print('noaa selftest ok')
+
+
 def main():
-    ap = argparse.ArgumentParser(); ap.add_argument('--out', default='_new/deniz/v1'); a = ap.parse_args()
+    ap = argparse.ArgumentParser(); ap.add_argument('--out', default='_new/deniz/v1'); ap.add_argument('--selftest', action='store_true'); a = ap.parse_args()
+    if a.selftest:
+        noaa_selftest()
+        return 0 if selftest() < 0.02 else 1
     res = []
     now = dt.datetime.now(dt.timezone.utc)
     for s in ST:
@@ -128,6 +240,10 @@ def main():
             r['err'] = repr(e)[:200]; print('::warning title=Gelgit %s::%s' % (s['n'], r['err']))
         res.append(r)
     out = Path(a.out); out.mkdir(parents=True, exist_ok=True)
+    try:
+        noaa_export(out, now)
+    except Exception as e:
+        print('::warning title=NOAA gelgit tahmini::%s' % repr(e)[:200])
     (out / 'gelgit_dogrulama.json').write_text(json.dumps({'gen': now.strftime('%Y-%m-%dT%H:%MZ'), 'st': res}, ensure_ascii=False, separators=(',', ':')))
     return 0
 
