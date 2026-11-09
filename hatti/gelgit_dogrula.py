@@ -181,6 +181,9 @@ def noaa_pack(meta, hourly, hilo):
     return dict(meta, t0=int(t[0] * 1000), v=v, hl=hl)
 
 
+FAZ = []
+
+
 def harcon_check(sid, hourly):
     """faz tanımı sınaması (veri hatasından bağımsız): NOAA'nın kendi tahminini bu yöntemle analiz et, çıkan Greenwich fazını
     NOAA'nın yayımladığı harmonik sabitle (phase_GMT) karşılaştır. Fark ~0° olmalı."""
@@ -204,13 +207,15 @@ def noaa_export(out, now):
             if sid in ('8724580', '8771450', '9414290', '8443970', '8638610'):
                 try:
                     hc = harcon_check(sid, hourly)
-                    print('::notice title=Faz tanımı %s::%s' % (st[-1]['n'], ' · '.join('%s genlik oranı %.2f, faz farkı %+.0f°' % (n, a, g) for n, (a, g) in hc.items())))
+                    FAZ.append('%s: %s' % (st[-1]['n'].split(',')[0], ', '.join('%s %+.0f° (×%.2f)' % (n, g, a) for n, (a, g) in hc.items())))
                 except Exception as e:
                     print('::warning title=Faz tanımı %s::%s' % (sid, repr(e)[:160]))
         except Exception as e:
             bad.append(sid); print('::warning title=NOAA %s::%s' % (sid, repr(e)[:160]))
     (out / 'noaa.json').write_text(json.dumps({'gen': now.strftime('%Y-%m-%dT%H:%MZ'), 'datum': 'MSL', 'st': st}, ensure_ascii=False, separators=(',', ':')))
     print('::notice title=NOAA gelgit tahmini::%d istasyon yazıldı (%d hata) · %s – %s' % (len(st), len(bad), d0, d1))
+    if FAZ:   # GitHub bir adımda en çok 10 not gösterir: tek satırda topla
+        print('::notice title=Faz tanımı (NOAA sabitine göre fark, genlik oranı)::' + ' | '.join(FAZ))
 
 
 def noaa_selftest():
@@ -218,6 +223,9 @@ def noaa_selftest():
     p = noaa_pack({'id': 'x', 'n': 'x', 'state': '', 'lat': 1, 'lon': 2}, h, [{'t': '2026-11-09 06:12', 'v': '0.501', 'type': 'H'}, {'t': '2026-11-09 12:30', 'v': '-0.4', 'type': 'L'}])
     assert p['v'][0] == 500 and p['hl'][0][1] == 'H' and p['hl'][1][2] == -400 and len(p['v']) == 60
     print('noaa selftest ok')
+
+
+NOTE_TR, NOTE_US = [], []
 
 
 def main():
@@ -256,7 +264,7 @@ def main():
                         dts.append(min(abs(tt - x[0]) for x in c) / 60)
                 r.update({'rmse_cm': round(rmse * 100, 1), 'aralik_cm': round(rng * 100, 1), 'olay_dk': round(float(np.median(dts)), 0) if dts else None})
                 msg = 'RMSE %.1f cm (gelgit aralığı %.0f cm) · yüksek/alçak su saat farkı ortanca %s dk · %s gün veri' % (r['rmse_cm'], r['aralik_cm'], r['olay_dk'], r['days'])
-            print('::notice title=Gelgit %s::%s' % (s['n'], msg))
+            (NOTE_TR if s['k'].startswith('tudes') else NOTE_US).append('%s: %s' % (s['n'], msg))
         except Exception as e:
             r['err'] = repr(e)[:200]; print('::warning title=Gelgit %s::%s' % (s['n'], r['err']))
         res.append(r)
@@ -265,6 +273,9 @@ def main():
         noaa_export(out, now)
     except Exception as e:
         print('::warning title=NOAA gelgit tahmini::%s' % repr(e)[:200])
+    for title, L in (('Gelgit TUDES (model / istasyon)', NOTE_TR), ('Gelgit NOAA (model hatası)', NOTE_US)):
+        for i in range(0, len(L), 3):
+            print('::notice title=%s %d::%s' % (title, i // 3 + 1, ' | '.join(L[i:i + 3])))
     (out / 'gelgit_dogrulama.json').write_text(json.dumps({'gen': now.strftime('%Y-%m-%dT%H:%MZ'), 'st': res}, ensure_ascii=False, separators=(',', ':')))
     return 0
 
