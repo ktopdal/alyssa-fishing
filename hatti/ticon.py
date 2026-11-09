@@ -70,6 +70,21 @@ def main():
     (o / 'ticon.json').write_text(json.dumps({'src': 'TICON-4 (SEANOE doi 10.17882/109129, CC BY 4.0)', 'unit': 'm', 'st': out}, ensure_ascii=False, separators=(',', ':')))
     print('::notice title=TICON-4::%d Akdeniz/Karadeniz istasyonu (Türkiye kıyısı %d) · M2 genlik ortancası %.3f (ham) · %s' % (
         len(out), len(tr), med, ' | '.join('%s M2 %.1f cm %.0f°' % (s['n'], s['C']['M2'][0] * 100, s['C']['M2'][1]) for s in tr[:8])))
+    # sınama: HGM (TUDES) yayımlanmış sabitleri (ChatGPT 2C; yalnız karşılaştırma için, uygulamaya girmez)
+    HGM = {'Menteş': (38.42961, 26.72215, {'M2': (5.87, 45.87), 'S2': (4.04, 61.01), 'K1': (2.44, 137.95), 'O1': (1.23, 126.38)}),
+           'Bodrum': (37.03218, 27.42346, {'M2': (4.07, 250.26), 'S2': (2.66, 71.52), 'K1': (1.99, 210.23), 'O1': (0.97, 358.78)}),
+           'Antalya': (36.83042, 30.60868, {'M2': (7.16, 225.31), 'S2': (4.26, 46.43), 'K1': (1.99, 184.54), 'O1': (1.12, 342.09)}),
+           'Erdek': (40.38988, 27.84518, {'M2': (0.49, 114.22), 'S2': (0.29, 201.0), 'K1': (1.17, 273.96), 'O1': (0.79, 165.13)})}
+    lines = []
+    for nm, (la, lo, C) in HGM.items():
+        near = sorted(out, key=lambda s: (s['lat'] - la) ** 2 + ((s['lon'] - lo) * math.cos(math.radians(la))) ** 2)[:2]
+        for s in near:
+            dkm = math.hypot(s['lat'] - la, (s['lon'] - lo) * math.cos(math.radians(la))) * 111.2
+            if dkm > 15:
+                continue
+            lines.append('%s ~ %s (%.0f km): %s' % (nm, s['n'], dkm, ', '.join('%s %.1f/%.1f cm %+.0f°' % (n, s['C'][n][0] * 100, C[n][0], ((s['C'][n][1] - C[n][1] + 180) % 360) - 180) for n in C if n in s['C'])))
+    if lines:
+        print('::notice title=TICON-4 ve HGM karşılaştırması (genlik TICON/HGM, faz farkı)::' + ' | '.join(lines))
     return 0
 
 
