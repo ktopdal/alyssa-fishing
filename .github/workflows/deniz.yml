@@ -46,6 +46,14 @@ jobs:
         run: |
           if [ -z "$COPERNICUSMARINE_SERVICE_USERNAME" ]; then echo "Copernicus bilgileri yok; deniz verisi atlandı"; exit 1; fi
           python3 hatti/deniz.py --out _new/deniz/v1 --cache .cache/deniz
+      - name: TICON-4 önbelleği
+        uses: actions/cache@v4
+        with:
+          path: .cache/ticon
+          key: ticon4-v1
+      - name: Gelgit istasyonları (TICON-4)
+        continue-on-error: true
+        run: python3 hatti/ticon.py --out _new/deniz/v1 --cache .cache/ticon
       - name: Gelgit doğrulaması
         continue-on-error: true
         run: python3 hatti/gelgit_dogrula.py --out _new/deniz/v1
