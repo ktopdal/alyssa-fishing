@@ -15,10 +15,10 @@ import numpy as np
 C = [('M2', 28.9841042, 1), ('S2', 30.0, 14.8), ('N2', 28.4397295, 27.6), ('K1', 15.0410686, 13.7), ('O1', 13.9430356, 13.7), ('Q1', 13.3986609, 27.6), ('M4', 57.9682084, 1)]
 T0 = dt.datetime(2000, 1, 1, tzinfo=dt.timezone.utc).timestamp()
 ST = [  # TUDES genlikleri: HGM 2003 Ek-C / Ocean Science 2022 (ChatGPT araştırması, 9 Kasım 2026)
-    {'k': 'tudes-mentes', 'n': 'Menteş (İzmir)', 'lat': 38.42961, 'lon': 26.72215, 'amp': {'M2': 5.8664, 'S2': 4.0355, 'K1': 2.4448, 'O1': 1.2305}},
-    {'k': 'tudes-bodrum-ii', 'n': 'Bodrum-II', 'lat': 37.03218, 'lon': 27.42346, 'amp': {'M2': 4.067, 'S2': 2.6577, 'K1': 1.9855, 'O1': 0.9704}},
-    {'k': 'tudes-antalya-ii', 'n': 'Antalya-II', 'lat': 36.83042, 'lon': 30.60868, 'amp': {'M2': 7.1584, 'S2': 4.2613, 'K1': 1.9862, 'O1': 1.1225}},
-    {'k': 'tudes-erdek', 'n': 'Erdek', 'lat': 40.38988, 'lon': 27.84518, 'amp': {'M2': 0.4855, 'S2': 0.29, 'K1': 1.168, 'O1': 0.7906}},
+    {'k': 'tudes-mentes', 'n': 'Menteş (İzmir)', 'lat': 38.42961, 'lon': 26.72215, 'amp': {'M2': 5.8664, 'S2': 4.0355, 'K1': 2.4448, 'O1': 1.2305}, 'g': {'M2': 45.87, 'S2': 61.01, 'K1': 137.95, 'O1': 126.38}},
+    {'k': 'tudes-bodrum-ii', 'n': 'Bodrum-II', 'lat': 37.03218, 'lon': 27.42346, 'amp': {'M2': 4.067, 'S2': 2.6577, 'K1': 1.9855, 'O1': 0.9704}, 'g': {'M2': 250.26, 'S2': 71.52, 'K1': 210.23, 'O1': 358.78}},
+    {'k': 'tudes-antalya-ii', 'n': 'Antalya-II', 'lat': 36.83042, 'lon': 30.60868, 'amp': {'M2': 7.1584, 'S2': 4.2613, 'K1': 1.9862, 'O1': 1.1225}, 'g': {'M2': 225.31, 'S2': 46.43, 'K1': 184.54, 'O1': 342.09}},
+    {'k': 'tudes-erdek', 'n': 'Erdek', 'lat': 40.38988, 'lon': 27.84518, 'amp': {'M2': 0.4855, 'S2': 0.29, 'K1': 1.168, 'O1': 0.7906}, 'g': {'M2': 114.22, 'S2': 201.0, 'K1': 273.96, 'O1': 165.13}},
     {'k': 'tudes-gokceada', 'n': 'Gökçeada', 'lat': 40.23171, 'lon': 25.89349, 'amp': {'M2': 6.58, 'S2': 4.92, 'K1': 2.10, 'O1': 0.96}},   # Alpar ve Yüce 1998, 1994 geçici mareograf (2B)
     {'k': '8724580', 'n': 'Key West, FL', 'lat': 24.5557, 'lon': -81.8079, 'noaa': True},
     {'k': '8771450', 'n': 'Galveston Pier 21, TX', 'lat': 29.3100, 'lon': -94.7933, 'noaa': True},
@@ -218,6 +218,9 @@ def main():
                 r['ist'] = s['amp']
                 r['fark'] = {n: round(r['model'].get(n, float('nan')) - s['amp'][n], 2) for n in s['amp'] if n in r['model']}
                 msg = ' · '.join('%s model %.1f / istasyon %.1f cm' % (n, r['model'][n], s['amp'][n]) for n in ('M2', 'S2', 'K1', 'O1') if n in r['model'])
+                if s.get('g'):   # v0.41.0 (ChatGPT 2C): Greenwich faz gecikmesi (derece); fark -180..180, M2'de 30° ≈ 1 saat
+                    r['faz_fark'] = {n: round(((F['C'][n]['g'] - s['g'][n] + 180) % 360) - 180, 1) for n in s['g'] if n in F['C']}
+                    msg += ' · faz farkı ' + ', '.join('%s %+.0f°' % (n, d) for n, d in r['faz_fark'].items())
             else:
                 d0 = now.date(); d1 = d0 + dt.timedelta(days=3)
                 tn, vn = noaa_pred(s['k'], d0, d1)
