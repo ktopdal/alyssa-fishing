@@ -7,6 +7,8 @@ tek bir dosyayla okuyabileceği küçük döşemelere (0,5° x 0,5°) yazar:
   cur  : derinlikteki akıntı (u, v; 3 saatte bir; 1, 10, 30, 50 m)
   zos  : deniz yüzeyi yüksekliği (saatlik; gelgit motorunu sınamak için)
   bati : derinlik ve eğim (EMODnet; bir kez hesaplanır, önbellekte tutulur)
+  fr   : yüzey sıcaklık cephesi (günlük; °C/km, sıcaklığın yatay eğimi, Belkin–O'Reilly benzeri yumuşatma) (v0.39.7)
+  chl  : yüzey klorofili (günlük; mg/m³, BGC modeli; kendi ızgarasında, log10 ile saklanır) (v0.39.7)
 
 Kimlik bilgileri yalnız ortam değişkenlerinden gelir (GitHub Secrets):
   COPERNICUSMARINE_SERVICE_USERNAME, COPERNICUSMARINE_SERVICE_PASSWORD
@@ -66,7 +68,7 @@ def nearest_levels(depths, want):
 
 
 # ---------------------------------------------------------------- Copernicus: ürünün veri setlerini bul
-def pick_datasets(product_id):
+def pick_datasets(product_id, want='phy'):
     import copernicusmarine as cm
     cat = cm.describe(product_id=product_id, disable_progress_bar=True)
     found = {}
@@ -89,6 +91,8 @@ def pick_datasets(product_id):
                 if all(x in d for x in pat):
                     return d
         return cands[0] if cands else None
+    if want == 'bgc':
+        return {'chl': best('chl', [('pft', 'P1D'), ('P1D',)])}
     return {
         'temp': best('thetao', [('P1D',), ('PT1H',)]),
         'cur': best('uo', [('3D', 'PT1H'), ('PT6H',), ('PT1H',), ('P1D',)]),   # MED: 3B saatlik · GLO: 3B 6 saatlik
@@ -117,6 +121,42 @@ def ms(t):
     return int(np.datetime64(t, 'ms').astype('int64'))
 
 
+def front_field(sst, la, lo):
+    """yüzey sıcaklığının yatay eğimi (°C/km): 3x3 ortalama ile yumuşatılır, merkezî farklarla türev alınır (kıyıda eksik hücre atlanır)"""
+    a = np.array(sst, dtype=float)                      # t, y, x
+    pad = np.pad(a, ((0, 0), (1, 1), (1, 1)), constant_values=np.nan)
+    st = np.stack([pad[:, 1 + dy:pad.shape[1] - 1 + dy, 1 + dx:pad.shape[2] - 1 + dx] for dy in (-1, 0, 1) for dx in (-1, 0, 1)])
+    import warnings
+    with warnings.catch_warnings(), np.errstate(all='ignore'):
+        warnings.simplefilter('ignore', RuntimeWarning); sm = np.nanmean(st, axis=0)
+    sm[~np.isfinite(a)] = np.nan
+    dy_km = abs(float(la[1] - la[0])) * 111.2 if len(la) > 1 else 4.6
+    dx_km = abs(float(lo[1] - lo[0])) * 111.2 * np.cos(np.radians(la))[None, :, None] if len(lo) > 1 else 4.6
+    gy = np.full_like(sm, np.nan); gx = np.full_like(sm, np.nan)
+    gy[:, 1:-1, :] = (sm[:, 2:, :] - sm[:, :-2, :]) / (2 * dy_km)
+    gx[:, :, 1:-1] = (sm[:, :, 2:] - sm[:, :, :-2]) / (2 * dx_km[:, :, :] if np.ndim(dx_km) else 2 * dx_km)
+    return np.hypot(gx, gy)
+
+
+def chl_block(d, la, lo, ts):
+    """klorofil döşemesi: kendi ızgarası (BGC ızgarası fizik ızgarasından farklı olabilir), log10(mg/m³) x 1000"""
+    CLA, CLO = coords(d)
+    iy = np.where((CLA >= la - 1e-6) & (CLA < la + ts - 1e-6))[0]; ix = np.where((CLO >= lo - 1e-6) & (CLO < lo + ts - 1e-6))[0]
+    if not len(iy) or not len(ix):
+        return None
+    a = d['chl'].values
+    a = a[:, 0] if a.ndim == 4 else a
+    a = a[:, iy[0]:iy[-1] + 1, ix[0]:ix[-1] + 1]
+    if not np.isfinite(a).any():
+        return None
+    with np.errstate(all='ignore'):
+        lg = np.log10(np.clip(a, 1e-3, 100))
+    t = d['time'].values
+    return {'lat0': round(float(CLA[iy[0]]), 5), 'lon0': round(float(CLO[ix[0]]), 5), 'dlat': round(float(CLA[1] - CLA[0]), 6) if len(CLA) > 1 else 0.25,
+            'dlon': round(float(CLO[1] - CLO[0]), 6) if len(CLO) > 1 else 0.25, 'ny': int(a.shape[1]), 'nx': int(a.shape[2]),
+            't0': ms(t[0]), 'dt': ms(t[1]) - ms(t[0]) if len(t) > 1 else 86400000, 'nt': int(a.shape[0]), 's': 0.001, 'd': b64i16(lg, 0.001)}
+
+
 def write_region(reg, dsets, out, bati=None):
     """dsets: {'temp': xr.Dataset|None, 'cur': ..., 'zos': ...} zaten kutuya kesilmiş. bati: {'lat','lon','z','slope'} ya da None"""
     ts = reg.get('tile', 0.5)
@@ -126,6 +166,9 @@ def write_region(reg, dsets, out, bati=None):
         raise RuntimeError('bölge için veri yok')
     LA, LO = coords(base)
     tiles = []
+    FR = None
+    if dsets.get('temp') is not None:
+        d = dsets['temp']; FR = front_field(d['thetao'].isel(depth=0).values, *coords(d))
     for la, lo in tile_keys(reg['bbox'], ts):
         iy = np.where((LA >= la - 1e-6) & (LA < la + ts - 1e-6))[0]
         ix = np.where((LO >= lo - 1e-6) & (LO < lo + ts - 1e-6))[0]
@@ -144,6 +187,9 @@ def write_region(reg, dsets, out, bati=None):
                 rec['temp'] = {'t0': ms(d['time'].values[0]), 'dt': ms(d['time'].values[1]) - ms(d['time'].values[0]) if d.sizes['time'] > 1 else 86400000,
                                'nt': int(a.shape[0]), 'z': zg, 's': 0.01, 'd': b64i16(a, 0.01)}
                 rec['src']['temp'] = reg['_ids'].get('temp')
+                f = FR[:, y0:y1, x0:x1]
+                if np.isfinite(f).any():
+                    rec['fr'] = {'t0': rec['temp']['t0'], 'dt': rec['temp']['dt'], 'nt': int(f.shape[0]), 's': 0.001, 'd': b64i16(f, 0.001)}
         d = dsets.get('cur')
         if d is not None:
             if 'depth' in d.dims:
@@ -167,6 +213,10 @@ def write_region(reg, dsets, out, bati=None):
                 t = d['time'].values
                 rec['zos'] = {'t0': ms(t[0]), 'dt': ms(t[1]) - ms(t[0]) if len(t) > 1 else 3600000, 'nt': int(a.shape[0]), 's': 0.001, 'd': b64i16(a, 0.001)}
                 rec['src']['zos'] = reg['_ids'].get('zos')
+        if dsets.get('chl') is not None:
+            c = chl_block(dsets['chl'], la, lo, ts)
+            if c:
+                rec['chl'] = c; rec['src']['chl'] = reg['_ids'].get('chl')
         if bati is not None:
             by = np.where((bati['lat'] >= la - 1e-6) & (bati['lat'] < la + ts - 1e-6))[0]
             bx = np.where((bati['lon'] >= lo - 1e-6) & (bati['lon'] < lo + ts - 1e-6))[0]
@@ -223,7 +273,7 @@ def run(args):
     out = Path(args.out); out.mkdir(parents=True, exist_ok=True)
     now = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None).replace(minute=0, second=0, microsecond=0)
     t0 = (now - dt.timedelta(days=1)).strftime('%Y-%m-%dT%H:%M:%S'); t1 = (now + dt.timedelta(days=args.days)).strftime('%Y-%m-%dT%H:%M:%S')
-    index = {'v': 1, 'gen': now.strftime('%Y-%m-%dT%H:%MZ'), 'attr': 'E.U. Copernicus Marine Service Information; EMODnet Bathymetry', 'regions': []}
+    index = {'v': 1, 'gen': now.strftime('%Y-%m-%dT%H:%MZ'), 'attr': 'E.U. Copernicus Marine Service Information; EMODnet Bathymetry', 'v_fr': 1, 'v_chl': 1, 'regions': []}
     for reg in regs:
         if not reg.get('on', True) or (args.only and reg['id'] not in args.only.split(',')):
             continue
@@ -235,6 +285,14 @@ def run(args):
             dsets['temp'] = open_sub(ids['temp'], ['thetao'], bb, t0, t1, 110) if ids.get('temp') else None
             dsets['cur'] = open_sub(ids['cur'], ['uo', 'vo'], bb, t0, t1, 55) if ids.get('cur') else None
             dsets['zos'] = open_sub(ids['zos'], ['zos'], bb, t0, t1) if ids.get('zos') else None
+            dsets['chl'] = None
+            if reg.get('bgc'):
+                try:
+                    bi = pick_datasets(reg['bgc'], 'bgc'); ids.update(bi); log('klorofil', bi)
+                    if bi.get('chl'):
+                        dsets['chl'] = open_sub(bi['chl'], ['chl'], bb, t0, t1, 2)
+                except Exception as e:
+                    log('klorofil alınamadı:', e); print('::warning title=Klorofil %s::%s' % (reg['id'], repr(e)[:300]), flush=True)
             for k, d in dsets.items():
                 if d is not None:
                     dsets[k] = d.load()
@@ -273,13 +331,24 @@ def selftest():
                      coords={'time': th, 'depth': dep, 'latitude': lat, 'longitude': lon})
     zos = xr.Dataset({'zos': (('time', 'latitude', 'longitude'), 0.1 * np.sin(np.arange(72) / 12.42 * 2 * np.pi)[:, None, None] + np.zeros((72, len(lat), len(lon))))},
                      coords={'time': th, 'latitude': lat, 'longitude': lon})
-    reg = {'id': 'test', 'bbox': [26.0, 37.8, 27.0, 38.8], 'tile': 0.5, '_ids': {'temp': 'T', 'cur': 'C', 'zos': 'Z'}}
+    # cephe: 26.5° doğusu 1 °C daha sıcak (keskin sınır)
+    temp['thetao'][:, 0, :, lon >= 26.5] += 1.0
+    clat = np.arange(37.75, 38.85, 0.25); clon = np.arange(26.0, 27.1, 0.25)
+    chl = xr.Dataset({'chl': (('time', 'depth', 'latitude', 'longitude'), np.full((3, 1, len(clat), len(clon)), 0.2))},
+                     coords={'time': tt, 'depth': [0.5], 'latitude': clat, 'longitude': clon})
+    reg = {'id': 'test', 'bbox': [26.0, 37.8, 27.0, 38.8], 'tile': 0.5, '_ids': {'temp': 'T', 'cur': 'C', 'zos': 'Z', 'chl': 'B'}}
     with tempfile.TemporaryDirectory() as d:
-        tiles = write_region(reg, {'temp': temp, 'cur': cur, 'zos': zos}, Path(d))
+        tiles = write_region(reg, {'temp': temp, 'cur': cur, 'zos': zos, 'chl': chl}, Path(d))
         f = json.loads((Path(d) / 'test' / (tiles[0] + '.json')).read_text())
         a = np.frombuffer(base64.b64decode(f['temp']['d']), '<i2').reshape(f['temp']['nt'], len(f['temp']['z']), len(f['lat']), len(f['lon']))
         assert a[0, 0, 0, 0] == NA and abs(a[0, 0, -1, -1] * 0.01 - 19.95) < 0.02, a[0, 0, -1, -1]
         assert f['cur']['nt'] == 24 and f['cur']['z'] == [1.0, 10.5, 29.9, 51.0], f['cur']['z']
+        g = json.loads((Path(d) / 'test' / (tkey(38.0, 26.5) + '.json')).read_text())
+        fr = np.frombuffer(base64.b64decode(g['fr']['d']), '<i2').reshape(g['fr']['nt'], len(g['lat']), len(g['lon']))
+        assert fr[0, 5, 0] * 0.001 > 0.05 and fr[0, 5, 6] * 0.001 < 0.01, (fr[0, 5, :8])
+        cl = np.frombuffer(base64.b64decode(g['chl']['d']), '<i2')
+        assert abs(10 ** (cl[0] * 0.001) - 0.2) < 0.01 and g['chl']['nt'] == 3, cl[:3]
+        print('cephe en yüksek %.3f °C/km · klorofil %.2f mg/m³' % (fr[0].max() * 0.001, 10 ** (cl[0] * 0.001)))
         print('selftest ok:', tiles, 'temp z', f['temp']['z'], 'boyut', sum((Path(d) / 'test' / (t + '.json')).stat().st_size for t in tiles), 'bayt')
 
 
