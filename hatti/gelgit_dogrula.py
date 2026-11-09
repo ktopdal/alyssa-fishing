@@ -181,12 +181,32 @@ def noaa_pack(meta, hourly, hilo):
     return dict(meta, t0=int(t[0] * 1000), v=v, hl=hl)
 
 
+def harcon_check(sid, hourly):
+    """faz tanımı sınaması (veri hatasından bağımsız): NOAA'nın kendi tahminini bu yöntemle analiz et, çıkan Greenwich fazını
+    NOAA'nın yayımladığı harmonik sabitle (phase_GMT) karşılaştır. Fark ~0° olmalı."""
+    j = get('https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations/%s/harcon.json?units=metric' % sid)
+    hc = {c['name']: c for c in j.get('HarmonicConstituents', [])}
+    t = np.array([ts(x['t']) for x in hourly]); v = np.array([float(x['v']) for x in hourly])
+    F = fit(t, v); out = {}
+    for n in ('M2', 'S2', 'K1', 'O1'):
+        if n in F['C'] and n in hc:
+            out[n] = (round(F['C'][n]['amp'] / float(hc[n]['amplitude']), 2), round(((F['C'][n]['g'] - float(hc[n]['phase_GMT']) + 180) % 360) - 180, 1))
+    return out
+
+
 def noaa_export(out, now):
     d0 = (now - dt.timedelta(days=1)).date(); d1 = d0 + dt.timedelta(days=18)
     st, bad = [], []
     for sid in NOAA_IDS:
         try:
-            st.append(noaa_pack(noaa_meta(sid), noaa_get(sid, d0, d1, 'h'), noaa_get(sid, d0, d1, 'hilo')))
+            hourly = noaa_get(sid, d0, d1, 'h')
+            st.append(noaa_pack(noaa_meta(sid), hourly, noaa_get(sid, d0, d1, 'hilo')))
+            if sid in ('8724580', '8771450', '9414290', '8443970', '8638610'):
+                try:
+                    hc = harcon_check(sid, hourly)
+                    print('::notice title=Faz tanımı %s::%s' % (st[-1]['n'], ' · '.join('%s genlik oranı %.2f, faz farkı %+.0f°' % (n, a, g) for n, (a, g) in hc.items())))
+                except Exception as e:
+                    print('::warning title=Faz tanımı %s::%s' % (sid, repr(e)[:160]))
         except Exception as e:
             bad.append(sid); print('::warning title=NOAA %s::%s' % (sid, repr(e)[:160]))
     (out / 'noaa.json').write_text(json.dumps({'gen': now.strftime('%Y-%m-%dT%H:%MZ'), 'datum': 'MSL', 'st': st}, ensure_ascii=False, separators=(',', ':')))
