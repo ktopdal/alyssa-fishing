@@ -282,10 +282,13 @@ def write_region(reg, dsets, out, bati=None, sat=None):
             c = chl_block(dsets['chl'], la, lo, ts)
             if c:
                 rec['chl'] = c; rec['src']['chl'] = reg['_ids'].get('chl')
-        for k, (a, CLA, CLO, tt) in (sat or {}).items():
+        for k, v in (sat or {}).items():
+            a, CLA, CLO, tt = v[:4]
             b = grid_block(a, CLA, CLO, tt, la, lo, ts, 0.001)
             if b:
                 b['sat'] = 1
+                if len(v) > 4 and v[4] is not None:
+                    b['p90'] = v[4]                                       # cephe eşiği için bölgenin P90 eğimi (3B: eşik = max(P90, taban))
                 if k == 'chl':
                     rec['chl'] = b; rec['src']['chl'] = reg.get('sat_chl')
                 else:
@@ -296,9 +299,9 @@ def write_region(reg, dsets, out, bati=None, sat=None):
             if len(by) and len(bx):
                 zz = bati['z'][by[0]:by[-1] + 1, bx[0]:bx[-1] + 1]
                 if np.isfinite(zz).any():
-                    rec['bati'] = {'lat0': round(float(bati['lat'][by[0]]), 5), 'lon0': round(float(bati['lon'][bx[0]]), 5), 'd': B_RES,
+                    rec['bati'] = {'lat0': round(float(bati['lat'][by[0]]), 5), 'lon0': round(float(bati['lon'][bx[0]]), 5), 'd': round(float(bati.get('res', B_RES)), 8),
                                    'ny': int(zz.shape[0]), 'nx': int(zz.shape[1]), 'z': b64i16(zz, 1),
-                                   'sl': b64i16(bati['slope'][by[0]:by[-1] + 1, bx[0]:bx[-1] + 1], 0.1), 'src': 'EMODnet DTM'}
+                                   'sl': b64i16(bati['slope'][by[0]:by[-1] + 1, bx[0]:bx[-1] + 1], 0.1), 'src': bati.get('src', 'EMODnet DTM')}
         if not wet and 'bati' not in rec:
             continue
         k = tkey(la, lo)
@@ -338,6 +341,51 @@ def bathy_emodnet(bbox, cache):
     cache.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(f, lat=lat, lon=lon, z=a, slope=slope)
     return {'lat': lat, 'lon': lon, 'z': a, 'slope': slope}
+
+
+
+def bathy_from_tif(data, res_hint):
+    """GeoTIFF (yükseklik, deniz negatif) -> güneyden kuzeye ızgara, pozitif derinlik ve eğim"""
+    import io, rasterio
+    with rasterio.open(io.BytesIO(data)) as src:
+        a = src.read(1).astype('float64'); nod = src.nodata; tr = src.transform
+    if nod is not None:
+        a[a == nod] = np.nan
+    ny, nx = a.shape
+    lat = tr.f + (np.arange(ny) + 0.5) * tr.e; lon = tr.c + (np.arange(nx) + 0.5) * tr.a
+    if tr.e < 0:
+        a = a[::-1]; lat = lat[::-1]
+    a = np.where(a < 0, -a, np.nan)
+    res = abs(tr.a) or res_hint
+    dy = res * 111320.0; dx = res * 111320.0 * np.cos(np.radians(lat))[:, None]
+    gz = np.gradient(np.nan_to_num(a, nan=0.0))
+    slope = np.degrees(np.arctan(np.hypot(gz[0] / dy, gz[1] / dx)))
+    slope[~np.isfinite(a)] = np.nan
+    return {'lat': lat, 'lon': lon, 'z': a, 'slope': slope, 'res': res}
+
+
+def bathy_erddap(bbox, cache):
+    """v0.39.8: EMODnet dışı (ABD): NOAA ERDDAP SRTM15+ (15 açı saniyesi = 1/240°, ~460 m); olmazsa ETOPO1 (1/60°)"""
+    f = cache / ('bati_srtm_%s.npz' % '_'.join('%.2f' % x for x in bbox))
+    if f.exists():
+        z = np.load(f); return {k: z[k] for k in ('lat', 'lon', 'z', 'slope')} | {'res': float(z['res']), 'src': str(z['src'])}
+    import urllib.request
+    lo0, la0, lo1, la1 = bbox
+    tries = [('https://coastwatch.pfeg.noaa.gov/erddap/griddap/srtm15plus.geotif?z%%5B(%f):1:(%f)%%5D%%5B(%f):1:(%f)%%5D' % (la0, la1, lo0, lo1), 1 / 240, 'SRTM15+ (NOAA ERDDAP)'),
+             ('https://coastwatch.pfeg.noaa.gov/erddap/griddap/etopo180.geotif?altitude%%5B(%f):1:(%f)%%5D%%5B(%f):1:(%f)%%5D' % (la0, la1, lo0, lo1), 1 / 60, 'ETOPO1 (NOAA ERDDAP)')]
+    err = None
+    for url, res, name in tries:
+        try:
+            log('derinlik indiriliyor', name, url)
+            with urllib.request.urlopen(urllib.request.Request(url, headers={'User-Agent': 'alyssa-deniz'}), timeout=300) as r:
+                data = r.read()
+            b = bathy_from_tif(data, res); b['src'] = name
+            cache.mkdir(parents=True, exist_ok=True)
+            np.savez_compressed(f, lat=b['lat'], lon=b['lon'], z=b['z'], slope=b['slope'], res=b['res'], src=name)
+            return b
+        except Exception as e:
+            err = e; log(name, 'olmadı:', e)
+    raise err
 
 
 # ---------------------------------------------------------------- ana akış
@@ -385,13 +433,15 @@ def run(args):
                     sat = sat_fields(sd.get('sat_sst'), sd.get('sat_chl'))
                 except Exception as e:
                     print('::warning title=Uydu cephe %s::%s' % (reg['id'], repr(e)[:300]), flush=True)
-                for k, v in sat.items():
+                for k, v in list(sat.items()):
                     g = v[0][np.isfinite(v[0])]
-                    print('::notice title=Uydu %s %s::%s · %s hücre · P90 %.3f' % (reg['id'], k, str(v[3][0])[:10], g.size, float(np.percentile(g, 90)) if g.size else float('nan')), flush=True)
+                    p90 = round(float(np.percentile(g, 90)), 4) if g.size and k != 'chl' else None
+                    sat[k] = tuple(v[:4]) + (p90,)
+                    print('::notice title=Uydu %s %s::%s · %s hücre · P90 %s' % (reg['id'], k, str(v[3][0])[:10], g.size, p90), flush=True)
             bati = None
-            if reg.get('bati') == 'emodnet' and not args.no_bati:
+            if reg.get('bati') in ('emodnet', 'srtm15') and not args.no_bati:
                 try:
-                    bati = bathy_emodnet(reg['bbox'], Path(args.cache))
+                    bati = (bathy_emodnet if reg['bati'] == 'emodnet' else bathy_erddap)(reg['bbox'], Path(args.cache))
                 except Exception as e:
                     log('derinlik alınamadı:', e); print('::warning title=Derinlik %s::%s' % (reg['id'], repr(e)[:300]), flush=True)
             tiles = write_region(reg, dsets, out, bati, sat)
