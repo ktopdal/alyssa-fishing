@@ -1,5 +1,5 @@
 // service worker: önce ağ (güncellemeler hemen gelsin), ağ yoksa son kopya
-const P='awf-',C=P+'0.41.28';
+const P='awf-',C=P+'0.41.29';
 self.addEventListener('install',e=>{e.waitUntil(caches.open(C).then(c=>c.addAll(['./','index.html','manifest.webmanifest','icon-192.png','katalog.json'])).catch(()=>{}));self.skipWaiting();});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k.indexOf(P)===0&&k!==C).map(k=>caches.delete(k)))).then(()=>self.clients.claim()));});
 self.addEventListener('fetch',e=>{const r=e.request;if(r.method!=='GET')return;const u=new URL(r.url);if(u.origin!==location.origin)return;if(u.pathname.indexOf('/vendor/')>=0)return;self.addEventListener('notificationclick',e=>{e.notification.close();const h=(e.notification.data&&e.notification.data.url)||'';e.waitUntil(self.clients.matchAll({type:'window',includeUncontrolled:true}).then(cs=>{for(const c of cs){if('focus' in c){if(h)c.postMessage({hash:h});return c.focus();}}return self.clients.openWindow('./'+h);}));});
