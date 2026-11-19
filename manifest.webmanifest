@@ -1,7 +1,7 @@
 {
- "name": "Alyssa WF",
- "short_name": "Alyssa WF",
- "description": "Alyssa Weather & Fishing",
+ "name": "Alyssa: Balık Avı, Hava Durumu",
+ "short_name": "Alyssa",
+ "description": "Balık · Hava Durumu · Denizcilik & Mera Zekâsı",
  "id": "./",
  "start_url": "./",
  "scope": "./",

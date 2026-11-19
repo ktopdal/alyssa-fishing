@@ -1,4 +1,4 @@
-# Alyssa WF (Alyssa Weather & Fishing)
+# Alyssa: Balık Avı, Hava Durumu (Balık · Hava Durumu · Denizcilik & Mera Zekâsı)
 
 Deniz avı için hava ve deniz tahmini, solunar, av takvimi ve av pencereleri, harita, Rig Atölyesi, envanter, alışveriş listesi ve fotoğraflı av kaydı.
 
@@ -9,4 +9,4 @@ Güneş ve ay hesapları için [SunCalc](https://github.com/mourner/suncalc) (BS
 Harita verileri: © OpenStreetMap katkıcıları (Nominatim, Overpass), OpenSeaMap, EMODnet Bathymetry, Geology ve Seabed Habitats (EUSeaMap), Esri uydu görüntüsü.
 Takım danışmanı, kullanıcının kendi yapay zekâ anahtarıyla doğrudan sağlayıcıya sorar; anahtar yalnız kullanıcının cihazında durur.
 
-© 2026 Barbossa Mühendislik San. ve Tic. Ltd. Şti. (Seferihisar, İzmir) · Alyssa WF. Tüm hakları saklıdır.
+© 2026 Barbossa Mühendislik San. ve Tic. Ltd. Şti. (Seferihisar, İzmir) · Alyssa: Balık Avı, Hava Durumu. Tüm hakları saklıdır.
