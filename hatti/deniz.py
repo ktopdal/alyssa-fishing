@@ -344,6 +344,66 @@ def bathy_emodnet(bbox, cache):
 
 
 
+# v0.54.18 (Kenny, Fish Radar kıyası): ince derinlik döşemeleri. EMODnet DTM'nin kendi çözünürlüğü (1/16 açı dakikası = 1/960°, ~115 m),
+# 0,1°'lik ikili döşemeler (96x96 int16, 0,1 m; güneyden kuzeye satır, batıdan doğuya sütun; kara = -32768). Telefon yalnızca gereken döşemeyi indirir.
+BF_RES = 1 / 960
+BF_TS = 0.1
+
+
+def bathy_fine_chunk(la0, lo0, cache, step=1.0):
+    """1°x1° parça (960x960): EMODnet WCS'den yükseklik, deniz pozitif derinlik (m), kara NaN. Önbellekte tutulur (derinlik değişmez)."""
+    f = cache / ('bf_%.2f_%.2f.npz' % (la0, lo0))
+    if f.exists():
+        return np.load(f)['z']
+    import urllib.request
+    url = ('https://ows.emodnet-bathymetry.eu/wcs?service=wcs&version=1.0.0&request=getcoverage&coverage=emodnet:mean&crs=EPSG:4326'
+           '&BBOX=%f,%f,%f,%f&format=image/tiff&resx=%.10f&resy=%.10f' % (lo0, la0, lo0 + step, la0 + step, BF_RES, BF_RES))
+    log('EMODnet ince', la0, lo0)
+    last = None
+    for k in range(2):
+        try:
+            with urllib.request.urlopen(url, timeout=120) as r:
+                data = r.read()
+            break
+        except Exception as e:
+            last = e; time.sleep(5 * (k + 1))
+    else:
+        raise last
+    B = bathy_from_tif(data, BF_RES)
+    z = B['z']; n = int(round(step / BF_RES))
+    if z.shape != (n, n):                       # sunucu biraz farklı ızgara verirse en yakın hücreye örnekle
+        yy = np.clip(np.round((la0 + (np.arange(n) + 0.5) * BF_RES - B['lat'][0]) / (B['lat'][1] - B['lat'][0])).astype(int), 0, len(B['lat']) - 1)
+        xx = np.clip(np.round((lo0 + (np.arange(n) + 0.5) * BF_RES - B['lon'][0]) / (B['lon'][1] - B['lon'][0])).astype(int), 0, len(B['lon']) - 1)
+        z = z[yy][:, xx]
+    cache.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(f, z=z.astype('float32'))
+    return z
+
+
+def write_fine_bathy(reg, out, cache):
+    """Bölgenin ince derinlik döşemelerini out/bf/<anahtar>.bin olarak yazar; döşeme anahtarlarını döndürür."""
+    lo0, la0, lo1, la1 = reg['bbox']
+    bdir = out / 'bf'; bdir.mkdir(parents=True, exist_ok=True)
+    n = int(round(BF_TS / BF_RES)); keys = []
+    for cla in range(int(math.floor(la0)), int(math.ceil(la1))):
+        for clo in range(int(math.floor(lo0)), int(math.ceil(lo1))):
+            try:
+                z = bathy_fine_chunk(float(cla), float(clo), cache)
+            except Exception as e:
+                print('::warning title=İnce derinlik %s %d %d::%s' % (reg['id'], cla, clo, repr(e)[:200]), flush=True); continue
+            for i in range(10):
+                for j in range(10):
+                    la = round(cla + i * BF_TS, 2); lo = round(clo + j * BF_TS, 2)
+                    if la < la0 - 1e-9 or la >= la1 - 1e-9 or lo < lo0 - 1e-9 or lo >= lo1 - 1e-9:
+                        continue
+                    sub = z[i * n:(i + 1) * n, j * n:(j + 1) * n]
+                    if not np.isfinite(sub).any():
+                        continue
+                    a = np.where(np.isfinite(sub), np.clip(np.round(sub * 10), 0, 32767), NA).astype('<i2')
+                    k = tkey(la, lo); (bdir / (k + '.bin')).write_bytes(a.tobytes()); keys.append(k)
+    return keys
+
+
 def bathy_from_tif(data, res_hint):
     """GeoTIFF (yükseklik, deniz negatif) -> güneyden kuzeye ızgara, pozitif derinlik ve eğim"""
     import io, rasterio
@@ -445,7 +505,15 @@ def run(args):
                 except Exception as e:
                     log('derinlik alınamadı:', e); print('::warning title=Derinlik %s::%s' % (reg['id'], repr(e)[:300]), flush=True)
             tiles = write_region(reg, dsets, out, bati, sat)
-            index['regions'].append({'id': reg['id'], 'bbox': reg['bbox'], 'tile': reg.get('tile', 0.5), 'tiles': tiles, 'src': ids, 'bati': bool(bati), 'zos_tide': 'MEDSEA' in reg['phy']})
+            bf = []
+            if reg.get('bati') == 'emodnet' and reg.get('bati_ince') and not args.no_bati:
+                try:
+                    bf = write_fine_bathy(reg, out, Path(args.cache)); log(reg['id'], len(bf), 'ince derinlik döşemesi')
+                    print('::notice title=İnce derinlik %s::%d döşeme' % (reg['id'], len(bf)), flush=True)
+                except Exception as e:
+                    print('::warning title=İnce derinlik %s::%s' % (reg['id'], repr(e)[:300]), flush=True)
+            index['regions'].append({'id': reg['id'], 'bbox': reg['bbox'], 'tile': reg.get('tile', 0.5), 'tiles': tiles, 'src': ids, 'bati': bool(bati), 'zos_tide': 'MEDSEA' in reg['phy'],
+                                     **({'bf': {'res': BF_RES, 'ts': BF_TS, 'n': int(round(BF_TS / BF_RES)), 'scale': 0.1, 'tiles': bf, 'src': 'EMODnet DTM'}} if bf else {})})
             log(reg['id'], len(tiles), 'döşeme')
             info = ' · '.join('%s=%s %s' % (k, ids.get(k), dict(d.sizes) if d is not None else '-') for k, d in dsets.items())
             print('::notice title=Deniz %s::%d döşeme · %s · derinlik %s' % (reg['id'], len(tiles), info, 'var' if bati else 'yok'), flush=True)
