@@ -404,6 +404,140 @@ def write_fine_bathy(reg, out, cache):
     return keys
 
 
+# v0.56.03 (Kenny: "derinlik eğrileri tutarsız"): eğriler ve derinlik renklendirmesi de aynı ince ızgaradan (noktanın derinliğiyle birebir tutar).
+# 0,5°'lik döşemeler: dc/<anahtar>.json (eğriler) ve dp/<anahtar>.png (renk). Ek paket yok: yürüyen kareler ve PNG yazıcı numpy + zlib.
+DC_LEVELS = [10, 20, 30, 50, 75, 100, 150, 200, 300, 500, 1000]
+DC_TS = 0.5
+# kenarlar: 0 alt, 1 sağ, 2 üst, 3 sol (hücre köşeleri a=sol alt bit1, b=sağ alt bit2, c=sağ üst bit4, d=sol üst bit8)
+_MS = {1: [(3, 0)], 2: [(0, 1)], 3: [(3, 1)], 4: [(1, 2)], 5: [(3, 2), (0, 1)], 6: [(0, 2)], 7: [(3, 2)], 8: [(2, 3)], 9: [(2, 0)],
+       10: [(3, 0), (1, 2)], 11: [(2, 1)], 12: [(1, 3)], 13: [(1, 0)], 14: [(0, 3)]}
+
+
+def _rdp(pts, eps):
+    if len(pts) < 3:
+        return pts
+    keep = np.zeros(len(pts), bool); keep[0] = keep[-1] = True; st = [(0, len(pts) - 1)]
+    while st:
+        i, j = st.pop()
+        if j <= i + 1:
+            continue
+        a, b = pts[i], pts[j]; d = b - a; n = np.hypot(*d)
+        seg = pts[i + 1:j]
+        dist = np.abs(d[0] * (seg[:, 1] - a[1]) - d[1] * (seg[:, 0] - a[0])) / n if n > 0 else np.hypot(*(seg - a).T)
+        k = int(np.argmax(dist))
+        if dist[k] > eps:
+            m = i + 1 + k; keep[m] = True; st += [(i, m), (m, j)]
+    return pts[keep]
+
+
+def contours_grid(z, level):
+    """z: güneyden kuzeye ızgara (derinlik, kara=0). Dönüş: [(satır,sütun) dizileri]"""
+    ny, nx = z.shape
+    a = z[:-1, :-1]; b = z[:-1, 1:]; c = z[1:, 1:]; d = z[1:, :-1]
+    case = (a >= level) * 1 + (b >= level) * 2 + (c >= level) * 4 + (d >= level) * 8
+    W = nx  # kenar kimliği: yatay (i,j) -> 2*(i*W+j), dikey (i,j) -> 2*(i*W+j)+1
+    def eid(e, I, J):
+        return [2 * (I * W + J), 2 * (I * W + J + 1) + 1, 2 * ((I + 1) * W + J), 2 * (I * W + J) + 1][e]
+    segs = []
+    for cv, pairs in _MS.items():
+        I, J = np.nonzero(case == cv)
+        for e1, e2 in pairs:
+            segs.append(np.stack([eid(e1, I, J), eid(e2, I, J)], 1))
+    if not segs:
+        return []
+    S = np.concatenate(segs)
+    if not len(S):
+        return []
+    def pos(e):
+        i, r = divmod(e // 2, W); j = r
+        if e % 2 == 0:   # yatay kenar: satır i, sütun j..j+1
+            z0, z1 = z[i, j], z[i, j + 1]; t = (level - z0) / (z1 - z0) if z1 != z0 else 0.5; return (i, j + t)
+        z0, z1 = z[i, j], z[i + 1, j]; t = (level - z0) / (z1 - z0) if z1 != z0 else 0.5; return (i + t, j)
+    adj = {}
+    for k, (u, v) in enumerate(S.tolist()):
+        adj.setdefault(u, []).append(k); adj.setdefault(v, []).append(k)
+    used = np.zeros(len(S), bool); lines = []
+    for k0 in range(len(S)):
+        if used[k0]:
+            continue
+        used[k0] = True; u, v = S[k0].tolist(); chain = [u, v]
+        for end in (1, 0):   # iki yöne uzat
+            cur = chain[-1] if end else chain[0]
+            while True:
+                nxt = [k for k in adj.get(cur, []) if not used[k]]
+                if not nxt:
+                    break
+                k = nxt[0]; used[k] = True; p, q = S[k].tolist(); cur = q if p == cur else p
+                if end: chain.append(cur)
+                else: chain.insert(0, cur)
+        lines.append(np.array([pos(e) for e in chain]))
+    return lines
+
+
+def _png(rgba):
+    import zlib, struct
+    h, w, _ = rgba.shape
+    raw = b''.join(b'\x00' + rgba[i].tobytes() for i in range(h))
+    def ch(t, d):
+        return struct.pack('>I', len(d)) + t + d + struct.pack('>I', zlib.crc32(t + d) & 0xffffffff)
+    return b'\x89PNG\r\n\x1a\n' + ch(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 6, 0, 0, 0)) + ch(b'IDAT', zlib.compress(raw, 9)) + ch(b'IEND', b'')
+
+
+# derinlik renkleri (sığdan derine): açık turkuaz -> lacivert; log ölçek
+_DPAL = [(0, (178, 236, 236)), (10, (130, 214, 226)), (20, (88, 190, 214)), (50, (52, 156, 200)), (100, (34, 120, 184)), (200, (26, 88, 160)),
+         (500, (20, 60, 130)), (1000, (14, 40, 100)), (2500, (8, 22, 66))]
+
+
+def depth_rgba(z):
+    xs = np.log10(np.array([max(1, d) for d, _ in _DPAL], float)); cs = np.array([c for _, c in _DPAL], float)
+    zz = np.log10(np.clip(np.nan_to_num(z, nan=1), 1, 5000))
+    out = np.zeros(z.shape + (4,), np.uint8)
+    for k in range(3):
+        out[..., k] = np.interp(zz, xs, cs[:, k]).astype(np.uint8)
+    out[..., 3] = np.where(np.isfinite(z) & (z > 0), 255, 0)
+    return out
+
+
+def write_depth_layers(reg, out, cache):
+    """İnce ızgaradan 0,5°'lik eğri (json) ve renk (png) döşemeleri; anahtar listelerini döndürür."""
+    lo0, la0, lo1, la1 = reg['bbox']
+    LA0, LO0 = math.floor(la0), math.floor(lo0); LA1, LO1 = math.ceil(la1), math.ceil(lo1)
+    n1 = int(round(1 / BF_RES))
+    M = np.full(((LA1 - LA0) * n1, (LO1 - LO0) * n1), np.nan, 'float32')
+    for cla in range(LA0, LA1):
+        for clo in range(LO0, LO1):
+            f = cache / ('bf_%.2f_%.2f.npz' % (cla, clo))
+            if f.exists():
+                M[(cla - LA0) * n1:(cla - LA0 + 1) * n1, (clo - LO0) * n1:(clo - LO0 + 1) * n1] = np.load(f)['z']
+    cdir = out / 'dc'; pdir = out / 'dp'; cdir.mkdir(parents=True, exist_ok=True); pdir.mkdir(parents=True, exist_ok=True)
+    nt = int(round(DC_TS / BF_RES)); dck, dpk = [], []
+    la = math.floor(la0 / DC_TS) * DC_TS
+    while la < la1 - 1e-9:
+        lo = math.floor(lo0 / DC_TS) * DC_TS
+        while lo < lo1 - 1e-9:
+            r0 = int(round((la - LA0) / BF_RES)); c0 = int(round((lo - LO0) / BF_RES))
+            sub = M[r0:r0 + nt + 1, c0:c0 + nt + 1]   # bir hücre bindirme: komşu döşemenin eğrisiyle birleşir
+            k = tkey(round(la, 2), round(lo, 2))
+            if sub.size and np.isfinite(sub).any():
+                img = depth_rgba(sub[:nt, :nt])[::-1]   # PNG kuzeyden güneye
+                (pdir / (k + '.png')).write_bytes(_png(np.ascontiguousarray(img))); dpk.append(k)
+                zz = np.nan_to_num(sub, nan=0.0); L = []
+                for lev in DC_LEVELS:
+                    if np.nanmax(sub) < lev:
+                        continue
+                    for ln in contours_grid(zz, lev):
+                        if len(ln) < 2 or np.hypot(*np.diff(ln, axis=0).T).sum() < 4:   # kırıntı çizgiler (4 hücreden kısa) atılır
+                            continue
+                        ln = _rdp(ln, 0.35)
+                        pts = [[round(la + (r + 0.5) * BF_RES, 5), round(lo + (c + 0.5) * BF_RES, 5)] for r, c in ln.tolist()]
+                        L.append([lev, pts])
+                if L:
+                    (cdir / (k + '.json')).write_text(json.dumps({'l': L}, separators=(',', ':'))); dck.append(k)
+            lo += DC_TS
+        la += DC_TS
+    return dck, dpk
+
+
 def bf_diag(reg, out, bati):
     """v0.56.03 tanı: deneme noktasında ince döşeme, kaba ızgara ve canlı EMODnet derinliği yan yana (Fish Radar kıyası)."""
     import urllib.request, json as _j
@@ -529,16 +663,21 @@ def run(args):
                 except Exception as e:
                     log('derinlik alınamadı:', e); print('::warning title=Derinlik %s::%s' % (reg['id'], repr(e)[:300]), flush=True)
             tiles = write_region(reg, dsets, out, bati, sat)
-            bf = []
+            bf = []; dck = []; dpk = []
             if reg.get('bati') == 'emodnet' and reg.get('bati_ince') and not args.no_bati:
                 try:
                     bf = write_fine_bathy(reg, out, Path(args.cache)); log(reg['id'], len(bf), 'ince derinlik döşemesi')
                     bf_diag(reg, out, bati)
+                    try:
+                        dck, dpk = write_depth_layers(reg, out, Path(args.cache)); print('::notice title=Derinlik eğri/renk %s::%d eğri · %d renk döşemesi' % (reg['id'], len(dck), len(dpk)), flush=True)
+                    except Exception as e:
+                        dck, dpk = [], []; print('::warning title=Derinlik eğri/renk %s::%s' % (reg['id'], repr(e)[:300]), flush=True)
                     print('::notice title=İnce derinlik %s::%d döşeme' % (reg['id'], len(bf)), flush=True)
                 except Exception as e:
                     print('::warning title=İnce derinlik %s::%s' % (reg['id'], repr(e)[:300]), flush=True)
             index['regions'].append({'id': reg['id'], 'bbox': reg['bbox'], 'tile': reg.get('tile', 0.5), 'tiles': tiles, 'src': ids, 'bati': bool(bati), 'zos_tide': 'MEDSEA' in reg['phy'],
-                                     **({'bf': {'res': BF_RES, 'ts': BF_TS, 'n': int(round(BF_TS / BF_RES)), 'scale': 0.1, 'tiles': bf, 'src': 'EMODnet DTM'}} if bf else {})})
+                                     **({'bf': {'res': BF_RES, 'ts': BF_TS, 'n': int(round(BF_TS / BF_RES)), 'scale': 0.1, 'tiles': bf, 'src': 'EMODnet DTM'}} if bf else {}),
+                                     **({'dl': {'ts': DC_TS, 'levels': DC_LEVELS, 'dc': dck, 'dp': dpk}} if bf and (dck or dpk) else {})})
             log(reg['id'], len(tiles), 'döşeme')
             info = ' · '.join('%s=%s %s' % (k, ids.get(k), dict(d.sizes) if d is not None else '-') for k, d in dsets.items())
             print('::notice title=Deniz %s::%d döşeme · %s · derinlik %s' % (reg['id'], len(tiles), info, 'var' if bati else 'yok'), flush=True)
