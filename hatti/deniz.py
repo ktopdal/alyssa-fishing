@@ -404,6 +404,30 @@ def write_fine_bathy(reg, out, cache):
     return keys
 
 
+def bf_diag(reg, out, bati):
+    """v0.56.03 tanı: deneme noktasında ince döşeme, kaba ızgara ve canlı EMODnet derinliği yan yana (Fish Radar kıyası)."""
+    import urllib.request, json as _j
+    for la, lo in [(38.13, 26.6292)]:
+        lo0, la0, lo1, la1 = reg['bbox']
+        if not (la0 <= la < la1 and lo0 <= lo < lo1):
+            continue
+        k = tkey(math.floor(la / BF_TS + 1e-9) * BF_TS, math.floor(lo / BF_TS + 1e-9) * BF_TS); f = out / 'bf' / (k + '.bin'); fine = None; ring = None
+        if f.exists():
+            a = np.frombuffer(f.read_bytes(), '<i2').reshape(96, 96).astype(float); a[a == NA] = np.nan; a /= 10
+            y = int((la - math.floor(la / BF_TS + 1e-9) * BF_TS) / BF_RES); x = int((lo - math.floor(lo / BF_TS + 1e-9) * BF_TS) / BF_RES)
+            fine = a[y, x]; ring = a[max(0, y - 2):y + 3, max(0, x - 2):x + 3]
+        coarse = None
+        if bati:
+            iy = int(np.argmin(abs(bati['lat'] - la))); ix = int(np.argmin(abs(bati['lon'] - lo))); coarse = float(bati['z'][iy, ix])
+        live = None
+        try:
+            with urllib.request.urlopen('https://rest.emodnet-bathymetry.eu/depth_sample?geom=POINT(%f%%20%f)' % (lo, la), timeout=30) as r:
+                live = r.read().decode()[:200]
+        except Exception as e:
+            live = repr(e)[:120]
+        print('::notice title=Derinlik tanı %.4f %.4f::ince %s · kaba %s · canlı %s · çevre 5x5 %s' % (la, lo, fine, coarse, live, None if ring is None else np.round(ring).tolist()), flush=True)
+
+
 def bathy_from_tif(data, res_hint):
     """GeoTIFF (yükseklik, deniz negatif) -> güneyden kuzeye ızgara, pozitif derinlik ve eğim"""
     import io, rasterio
@@ -509,6 +533,7 @@ def run(args):
             if reg.get('bati') == 'emodnet' and reg.get('bati_ince') and not args.no_bati:
                 try:
                     bf = write_fine_bathy(reg, out, Path(args.cache)); log(reg['id'], len(bf), 'ince derinlik döşemesi')
+                    bf_diag(reg, out, bati)
                     print('::notice title=İnce derinlik %s::%d döşeme' % (reg['id'], len(bf)), flush=True)
                 except Exception as e:
                     print('::warning title=İnce derinlik %s::%s' % (reg['id'], repr(e)[:300]), flush=True)
