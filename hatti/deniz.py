@@ -541,7 +541,7 @@ def write_depth_layers(reg, out, cache):
 def bf_diag(reg, out, bati):
     """v0.56.03 tanı: deneme noktasında ince döşeme, kaba ızgara ve canlı EMODnet derinliği yan yana (Fish Radar kıyası)."""
     import urllib.request, json as _j
-    for la, lo in [(38.13, 26.6292)]:
+    for la, lo in [(38.13, 26.6292), (38.13586, 26.62158), (38.1400, 26.6250), (38.1300, 26.6150)]:
         lo0, la0, lo1, la1 = reg['bbox']
         if not (la0 <= la < la1 and lo0 <= lo < lo1):
             continue
@@ -549,7 +549,7 @@ def bf_diag(reg, out, bati):
         if f.exists():
             a = np.frombuffer(f.read_bytes(), '<i2').reshape(96, 96).astype(float); a[a == NA] = np.nan; a /= 10
             y = int((la - math.floor(la / BF_TS + 1e-9) * BF_TS) / BF_RES); x = int((lo - math.floor(lo / BF_TS + 1e-9) * BF_TS) / BF_RES)
-            fine = a[y, x]; ring = a[max(0, y - 2):y + 3, max(0, x - 2):x + 3]
+            fine = a[y, x]; ring = a[max(0, y - 3):y + 4, max(0, x - 3):x + 4]
         coarse = None
         if bati:
             iy = int(np.argmin(abs(bati['lat'] - la))); ix = int(np.argmin(abs(bati['lon'] - lo))); coarse = float(bati['z'][iy, ix])
