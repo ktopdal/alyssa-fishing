@@ -102,8 +102,13 @@
   ],
   "bati_ince": "ncei",
   "shelf": 400,
-  "only_bati": true,
-  "on": true
+  "on": true,
+  "tile": 0.5,
+  "phy": "GLOBAL_ANALYSISFORECAST_PHY_001_024",
+  "bgc": "GLOBAL_ANALYSISFORECAST_BGC_001_028",
+  "sat_chl": "cmems_obs-oc_glo_bgc-plankton_nrt_l4-gapfree-multi-4km_P1D",
+  "sat_sst": "METOFFICE-GLO-SST-L4-NRT-OBS-SST-V2",
+  "bati": "srtm15"
  },
  {
   "id": "us-fln",
@@ -116,8 +121,13 @@
   ],
   "bati_ince": "ncei",
   "shelf": 400,
-  "only_bati": true,
-  "on": true
+  "on": true,
+  "tile": 0.5,
+  "phy": "GLOBAL_ANALYSISFORECAST_PHY_001_024",
+  "bgc": "GLOBAL_ANALYSISFORECAST_BGC_001_028",
+  "sat_chl": "cmems_obs-oc_glo_bgc-plankton_nrt_l4-gapfree-multi-4km_P1D",
+  "sat_sst": "METOFFICE-GLO-SST-L4-NRT-OBS-SST-V2",
+  "bati": "srtm15"
  },
  {
   "id": "us-se",
@@ -130,8 +140,13 @@
   ],
   "bati_ince": "ncei",
   "shelf": 400,
-  "only_bati": true,
-  "on": true
+  "on": true,
+  "tile": 0.5,
+  "phy": "GLOBAL_ANALYSISFORECAST_PHY_001_024",
+  "bgc": "GLOBAL_ANALYSISFORECAST_BGC_001_028",
+  "sat_chl": "cmems_obs-oc_glo_bgc-plankton_nrt_l4-gapfree-multi-4km_P1D",
+  "sat_sst": "METOFFICE-GLO-SST-L4-NRT-OBS-SST-V2",
+  "bati": "srtm15"
  },
  {
   "id": "us-ma",
@@ -144,8 +159,13 @@
   ],
   "bati_ince": "ncei",
   "shelf": 400,
-  "only_bati": true,
-  "on": true
+  "on": true,
+  "tile": 0.5,
+  "phy": "GLOBAL_ANALYSISFORECAST_PHY_001_024",
+  "bgc": "GLOBAL_ANALYSISFORECAST_BGC_001_028",
+  "sat_chl": "cmems_obs-oc_glo_bgc-plankton_nrt_l4-gapfree-multi-4km_P1D",
+  "sat_sst": "METOFFICE-GLO-SST-L4-NRT-OBS-SST-V2",
+  "bati": "srtm15"
  },
  {
   "id": "us-ne",
@@ -158,8 +178,13 @@
   ],
   "bati_ince": "ncei",
   "shelf": 400,
-  "only_bati": true,
-  "on": true
+  "on": true,
+  "tile": 0.5,
+  "phy": "GLOBAL_ANALYSISFORECAST_PHY_001_024",
+  "bgc": "GLOBAL_ANALYSISFORECAST_BGC_001_028",
+  "sat_chl": "cmems_obs-oc_glo_bgc-plankton_nrt_l4-gapfree-multi-4km_P1D",
+  "sat_sst": "METOFFICE-GLO-SST-L4-NRT-OBS-SST-V2",
+  "bati": "srtm15"
  },
  {
   "id": "us-ca",
@@ -172,8 +197,13 @@
   ],
   "bati_ince": "ncei",
   "shelf": 400,
-  "only_bati": true,
-  "on": true
+  "on": true,
+  "tile": 0.5,
+  "phy": "GLOBAL_ANALYSISFORECAST_PHY_001_024",
+  "bgc": "GLOBAL_ANALYSISFORECAST_BGC_001_028",
+  "sat_chl": "cmems_obs-oc_glo_bgc-plankton_nrt_l4-gapfree-multi-4km_P1D",
+  "sat_sst": "METOFFICE-GLO-SST-L4-NRT-OBS-SST-V2",
+  "bati": "srtm15"
  },
  {
   "id": "us-pnw",
@@ -186,7 +216,12 @@
   ],
   "bati_ince": "ncei",
   "shelf": 400,
-  "only_bati": true,
-  "on": true
+  "on": true,
+  "tile": 0.5,
+  "phy": "GLOBAL_ANALYSISFORECAST_PHY_001_024",
+  "bgc": "GLOBAL_ANALYSISFORECAST_BGC_001_028",
+  "sat_chl": "cmems_obs-oc_glo_bgc-plankton_nrt_l4-gapfree-multi-4km_P1D",
+  "sat_sst": "METOFFICE-GLO-SST-L4-NRT-OBS-SST-V2",
+  "bati": "srtm15"
  }
 ]
