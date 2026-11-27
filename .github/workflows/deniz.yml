@@ -21,12 +21,24 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 30
+      # v0.57.07 (Kenny: "güncelleme gelmedi"): bütün Türkiye ile deniz hattı ~15 dk sürüyor. Yalnız uygulama değiştiyse deniz verisi yeniden üretilmez,
+      # son üretilen (en çok 6 saatlik) veri kullanılır; uygulama birkaç dakikada yayına çıkar. Hat dosyaları değişince ya da 6 saatlik çalışmada üretilir.
+      - name: Deniz gerekli mi
+        id: gerek
+        run: |
+          if [ "${{ github.event_name }}" != "push" ]; then echo "run=1" >> "$GITHUB_OUTPUT"; exit 0; fi
+          if git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" 2>/dev/null | grep -qE '^(hatti/|\.github/)'; then echo "run=1" >> "$GITHUB_OUTPUT"; else echo "run=0" >> "$GITHUB_OUTPUT"; echo "yalnız uygulama değişti; son deniz verisi kullanılacak"; fi
       - uses: actions/setup-python@v6
+        if: steps.gerek.outputs.run == '1'
         with:
           python-version: '3.12'
       - name: Paketler
+        if: steps.gerek.outputs.run == '1'
         run: pip install -q copernicusmarine numpy xarray rasterio
       - name: Derinlik önbelleği
+        if: steps.gerek.outputs.run == '1'
         uses: actions/cache@v4
         with:
           path: .cache/deniz
@@ -42,6 +54,7 @@ jobs:
           restore-keys: deniz-last-
       - name: Deniz verisi
         id: deniz
+        if: steps.gerek.outputs.run == '1'
         continue-on-error: true
         env:
           COPERNICUSMARINE_SERVICE_USERNAME: ${{ secrets.COPERNICUSMARINE_SERVICE_USERNAME }}
@@ -50,14 +63,17 @@ jobs:
           if [ -z "$COPERNICUSMARINE_SERVICE_USERNAME" ]; then echo "Copernicus bilgileri yok; deniz verisi atlandı"; exit 1; fi
           python3 hatti/deniz.py --out _new/deniz/v1 --cache .cache/deniz
       - name: TICON-4 önbelleği
+        if: steps.gerek.outputs.run == '1'
         uses: actions/cache@v4
         with:
           path: .cache/ticon
           key: ticon4-v1
       - name: Gelgit istasyonları (TICON-4)
+        if: steps.gerek.outputs.run == '1'
         continue-on-error: true
         run: python3 hatti/ticon.py --out _new/deniz/v1 --cache .cache/ticon
       - name: Gelgit doğrulaması
+        if: steps.gerek.outputs.run == '1'
         continue-on-error: true
         run: python3 hatti/gelgit_dogrula.py --out _new/deniz/v1
       - name: Siteyi hazırla
