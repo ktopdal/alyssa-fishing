@@ -37,13 +37,16 @@ jobs:
       - name: Paketler
         if: steps.gerek.outputs.run == '1'
         run: pip install -q copernicusmarine numpy xarray rasterio
+      # v0.57.10: derinlik önbelleği (EMODnet + NCEI parçaları) yalnız yeni parça indiyse kaydedilir (deniz.py .cache/deniz/_yeni yazar);
+      # her çalışmada yüzlerce MB yeniden yüklenmesin
       - name: Derinlik önbelleği
         if: steps.gerek.outputs.run == '1'
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: .cache/deniz
-          key: bati-v2-${{ github.run_id }}
+          key: bati-v3-${{ github.run_id }}
           restore-keys: |
+            bati-v3-
             bati-v2-
             bati-v1-
       - name: Son deniz verisi (yedek)
@@ -62,6 +65,12 @@ jobs:
         run: |
           if [ -z "$COPERNICUSMARINE_SERVICE_USERNAME" ]; then echo "Copernicus bilgileri yok; deniz verisi atlandı"; exit 1; fi
           python3 hatti/deniz.py --out _new/deniz/v1 --cache .cache/deniz
+      - name: Derinlik önbelleğini sakla
+        if: steps.gerek.outputs.run == '1' && hashFiles('.cache/deniz/_yeni') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: .cache/deniz
+          key: bati-v3-${{ github.run_id }}
       - name: TICON-4 önbelleği
         if: steps.gerek.outputs.run == '1'
         uses: actions/cache@v4

@@ -336,7 +336,7 @@ def bathy_emodnet(bbox, cache):
         ny = min(p['z'].shape[0] for p in parts)
         out = {'lat': parts[0]['lat'][:ny], 'lon': np.concatenate([p['lon'] for p in parts]),
                'z': np.hstack([p['z'][:ny] for p in parts]), 'slope': np.hstack([p['slope'][:ny] for p in parts])}
-        cache.mkdir(parents=True, exist_ok=True); np.savez_compressed(f, **out)
+        cache.mkdir(parents=True, exist_ok=True); np.savez_compressed(f, **out); mark_new(cache)
         return out
     import io, urllib.request
     import rasterio
@@ -361,7 +361,7 @@ def bathy_emodnet(bbox, cache):
     slope = np.degrees(np.arctan(np.hypot(gz[0] / dy, gz[1] / dx)))
     slope[~np.isfinite(a)] = np.nan
     cache.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(f, lat=lat, lon=lon, z=a, slope=slope)
+    np.savez_compressed(f, lat=lat, lon=lon, z=a, slope=slope); mark_new(cache)
     return {'lat': lat, 'lon': lon, 'z': a, 'slope': slope}
 
 
@@ -370,6 +370,85 @@ def bathy_emodnet(bbox, cache):
 # 0,1°'lik ikili döşemeler (96x96 int16, 0,1 m; güneyden kuzeye satır, batıdan doğuya sütun; kara = -32768). Telefon yalnızca gereken döşemeyi indirir.
 BF_RES = 1 / 960
 BF_TS = 0.1
+
+
+# v0.57.10 (Madde 1, ABD): EMODnet yalnız Avrupa sularını kapsar. ABD kıyısı için NOAA NCEI DEM küresel mozaiği (ArcGIS ImageServer):
+# ABD kıyısında CUDEM ve Kıyı Rölyef Modeli (1/9–1 açı saniyesi, ~3–30 m), açıkta ETOPO 2022 (15 açı saniyesi). Aynı ince döşeme biçimine
+# (1/960°, 0,1°'lik 96x96 int16) çift doğrusal örnekleme ile indirilir. Raf dışı derin parçalar (bölgenin "shelf" sınırından derin) indirilmez.
+NCEI_IMG = 'https://gis.ngdc.noaa.gov/arcgis/rest/services/DEM_mosaics/DEM_global_mosaic/ImageServer/exportImage'
+NEW_MARK = '_yeni'   # önbelleğe yeni parça girdiyse iş akışı önbelleği kaydeder (yoksa her çalışmada yüzlerce MB yeniden yüklenmez)
+
+
+def mark_new(cache):
+    try:
+        cache.mkdir(parents=True, exist_ok=True); (cache / NEW_MARK).write_text('1')
+    except Exception:
+        pass
+
+
+def fine_src(reg):
+    v = reg.get('bati_ince')
+    return 'ncei' if v == 'ncei' else 'emodnet' if v else None
+
+
+def ncei_export(bbox, nx, ny, timeout=180):
+    """NCEI DEM mozaiğinden F32 GeoTIFF (yükseklik; deniz eksi). 4 deneme, artan bekleme."""
+    import urllib.request, urllib.parse
+    lo0, la0, lo1, la1 = bbox
+    q = urllib.parse.urlencode({'bbox': '%.6f,%.6f,%.6f,%.6f' % (lo0, la0, lo1, la1), 'bboxSR': 4326, 'imageSR': 4326, 'size': '%d,%d' % (nx, ny),
+                                'format': 'tiff', 'pixelType': 'F32', 'interpolation': 'RSP_BilinearInterpolation', 'f': 'image'})
+    last = None
+    for k in range(4):
+        try:
+            with urllib.request.urlopen(urllib.request.Request(NCEI_IMG + '?' + q, headers={'User-Agent': 'alyssa-deniz'}), timeout=timeout) as r:
+                data = r.read()
+            if data[:2] not in (b'II', b'MM'):
+                raise ValueError('tiff değil: %r' % data[:120])
+            return data
+        except Exception as e:
+            last = e; time.sleep(5 * (k + 1))
+    raise last
+
+
+def _fit_grid(B, la0, lo0, n, res):
+    z = B['z']
+    if z.shape != (n, n):                       # sunucu biraz farklı ızgara verirse en yakın hücreye örnekle
+        yy = np.clip(np.round((la0 + (np.arange(n) + 0.5) * res - B['lat'][0]) / (B['lat'][1] - B['lat'][0])).astype(int), 0, len(B['lat']) - 1)
+        xx = np.clip(np.round((lo0 + (np.arange(n) + 0.5) * res - B['lon'][0]) / (B['lon'][1] - B['lon'][0])).astype(int), 0, len(B['lon']) - 1)
+        z = z[yy][:, xx]
+    return z
+
+
+def bathy_fine_chunk_ncei(la0, lo0, cache, shelf=None, step=1.0):
+    """1°x1° NCEI parçası; önce 48x48 kaba bakış: hiç deniz yoksa ya da hepsi raftan (shelf + 150 m) derinse indirilmez ve işaretlenir."""
+    f = cache / ('bfn_%.2f_%.2f.npz' % (la0, lo0)); sk = cache / ('bfn_%.2f_%.2f.skip' % (la0, lo0))
+    if f.exists():
+        return np.load(f)['z']
+    if sk.exists():
+        return None
+    bb = [lo0, la0, lo0 + step, la0 + step]
+    pv = bathy_from_tif(ncei_export(bb, 48, 48, 60), step / 48)['z']
+    if not np.isfinite(pv).any() or (shelf and np.nanmin(pv) > shelf + 150):
+        cache.mkdir(parents=True, exist_ok=True); sk.write_text('deniz yok' if not np.isfinite(pv).any() else 'derin'); mark_new(cache)
+        return None
+    n = int(round(step / BF_RES))
+    z = _fit_grid(bathy_from_tif(ncei_export(bb, n, n), BF_RES), la0, lo0, n, BF_RES)
+    cache.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(f, z=z.astype('float32')); mark_new(cache)
+    log('NCEI ince', la0, lo0, 'deniz %d%%' % round(100 * np.isfinite(z).mean()))
+    return z
+
+
+def tile_bitmap(keys_ll, bbox, ts=0.1):
+    """Döşeme anahtarları yerine bit haritası (index.json küçük kalsın): satır güneyden kuzeye, sütun batıdan doğuya; base64"""
+    LA0 = math.floor(bbox[1] / ts + 1e-9) * ts; LO0 = math.floor(bbox[0] / ts + 1e-9) * ts
+    nx = int(math.ceil((bbox[2] - LO0) / ts - 1e-9)); ny = int(math.ceil((bbox[3] - LA0) / ts - 1e-9))
+    bits = np.zeros(nx * ny, np.uint8)
+    for la, lo in keys_ll:
+        ix = int(round((lo - LO0) / ts)); iy = int(round((la - LA0) / ts))
+        if 0 <= ix < nx and 0 <= iy < ny:
+            bits[iy * nx + ix] = 1
+    return {'la0': round(LA0, 4), 'lo0': round(LO0, 4), 'nx': nx, 'ny': ny, 'b': base64.b64encode(np.packbits(bits, bitorder='little').tobytes()).decode('ascii')}
 
 
 def bathy_fine_chunk(la0, lo0, cache, step=1.0):
@@ -398,31 +477,54 @@ def bathy_fine_chunk(la0, lo0, cache, step=1.0):
         xx = np.clip(np.round((lo0 + (np.arange(n) + 0.5) * BF_RES - B['lon'][0]) / (B['lon'][1] - B['lon'][0])).astype(int), 0, len(B['lon']) - 1)
         z = z[yy][:, xx]
     cache.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(f, z=z.astype('float32'))
+    np.savez_compressed(f, z=z.astype('float32')); mark_new(cache)
     return z
 
 
 def write_fine_bathy(reg, out, cache):
-    """Bölgenin ince derinlik döşemelerini out/bf/<anahtar>.bin olarak yazar; döşeme anahtarlarını döndürür."""
+    """Bölgenin ince derinlik döşemelerini out/bf/<anahtar>.bin olarak yazar; döşeme anahtarlarını döndürür.
+    v0.57.10: kaynak EMODnet (Türkiye) ya da NCEI (ABD); "shelf" verilmişse bütün hücreleri ondan derin döşemeler yazılmaz (ABD kıyısı geniş, site küçük kalsın)."""
     lo0, la0, lo1, la1 = reg['bbox']
+    src = fine_src(reg); shelf = reg.get('shelf')
     bdir = out / 'bf'; bdir.mkdir(parents=True, exist_ok=True)
-    n = int(round(BF_TS / BF_RES)); keys = []
-    for cla in range(int(math.floor(la0)), int(math.ceil(la1))):
-        for clo in range(int(math.floor(lo0)), int(math.ceil(lo1))):
+    n = int(round(BF_TS / BF_RES)); keys = []; reg['_bf_ll'] = []
+    chunks = [(float(cla), float(clo)) for cla in range(int(math.floor(la0)), int(math.ceil(la1))) for clo in range(int(math.floor(lo0)), int(math.ceil(lo1)))]
+    got = {}
+    if src == 'ncei':
+        from concurrent.futures import ThreadPoolExecutor
+        def one(c):
             try:
-                z = bathy_fine_chunk(float(cla), float(clo), cache)
+                return c, bathy_fine_chunk_ncei(c[0], c[1], cache, shelf), None
+            except Exception as e:
+                return c, None, e
+        with ThreadPoolExecutor(6) as ex:
+            for c, z, e in ex.map(one, chunks):
+                if e is not None:
+                    print('::warning title=İnce derinlik %s %d %d::%s' % (reg['id'], c[0], c[1], repr(e)[:200]), flush=True)
+                got[c] = z
+    for c in chunks:
+        cla, clo = c
+        if src == 'ncei':
+            z = got.get(c)
+        else:
+            try:
+                z = bathy_fine_chunk(cla, clo, cache)
             except Exception as e:
                 print('::warning title=İnce derinlik %s %d %d::%s' % (reg['id'], cla, clo, repr(e)[:200]), flush=True); continue
-            for i in range(10):
-                for j in range(10):
-                    la = round(cla + i * BF_TS, 2); lo = round(clo + j * BF_TS, 2)
-                    if la < la0 - 1e-9 or la >= la1 - 1e-9 or lo < lo0 - 1e-9 or lo >= lo1 - 1e-9:
-                        continue
-                    sub = z[i * n:(i + 1) * n, j * n:(j + 1) * n]
-                    if not np.isfinite(sub).any():
-                        continue
-                    a = np.where(np.isfinite(sub), np.clip(np.round(sub * 10), 0, 32767), NA).astype('<i2')
-                    k = tkey(la, lo); (bdir / (k + '.bin')).write_bytes(a.tobytes()); keys.append(k)
+        if z is None:
+            continue
+        for i in range(10):
+            for j in range(10):
+                la = round(cla + i * BF_TS, 2); lo = round(clo + j * BF_TS, 2)
+                if la < la0 - 1e-9 or la >= la1 - 1e-9 or lo < lo0 - 1e-9 or lo >= lo1 - 1e-9:
+                    continue
+                sub = z[i * n:(i + 1) * n, j * n:(j + 1) * n]
+                if not np.isfinite(sub).any():
+                    continue
+                if shelf and np.nanmin(sub) > shelf:
+                    continue
+                a = np.where(np.isfinite(sub), np.clip(np.round(sub * 10), 0, 32767), NA).astype('<i2')
+                k = tkey(la, lo); (bdir / (k + '.bin')).write_bytes(a.tobytes()); keys.append(k); reg['_bf_ll'].append((la, lo))
     return keys
 
 
@@ -528,7 +630,7 @@ def write_depth_layers(reg, out, cache):
     M = np.full(((LA1 - LA0) * n1, (LO1 - LO0) * n1), np.nan, 'float32')
     for cla in range(LA0, LA1):
         for clo in range(LO0, LO1):
-            f = cache / ('bf_%.2f_%.2f.npz' % (cla, clo))
+            f = cache / (('bfn_%.2f_%.2f.npz' if fine_src(reg) == 'ncei' else 'bf_%.2f_%.2f.npz') % (cla, clo))
             if f.exists():
                 M[(cla - LA0) * n1:(cla - LA0 + 1) * n1, (clo - LO0) * n1:(clo - LO0 + 1) * n1] = np.load(f)['z']
     cdir = out / 'dc'; pdir = out / 'dp'; cdir.mkdir(parents=True, exist_ok=True); pdir.mkdir(parents=True, exist_ok=True)
@@ -621,11 +723,29 @@ def bathy_erddap(bbox, cache):
                 data = r.read()
             b = bathy_from_tif(data, res); b['src'] = name
             cache.mkdir(parents=True, exist_ok=True)
-            np.savez_compressed(f, lat=b['lat'], lon=b['lon'], z=b['z'], slope=b['slope'], res=b['res'], src=name)
+            np.savez_compressed(f, lat=b['lat'], lon=b['lon'], z=b['z'], slope=b['slope'], res=b['res'], src=name); mark_new(cache)
             return b
         except Exception as e:
             err = e; log(name, 'olmadı:', e)
     raise err
+
+
+def region_entry(reg, tiles, ids, bati, bf, dck, dpk):
+    """index.json bölge kaydı. EMODnet bölgelerinde ince döşeme anahtar listesi (eski sürümler okur); NCEI bölgelerinde bit haritası (bm)."""
+    e = {'id': reg['id'], 'bbox': reg['bbox'], 'tile': reg.get('tile', 0.5), 'tiles': tiles, 'src': ids, 'bati': bati, 'zos_tide': 'MEDSEA' in (reg.get('phy') or '')}
+    if bf:
+        ncei = fine_src(reg) == 'ncei'
+        b = {'res': BF_RES, 'ts': BF_TS, 'n': int(round(BF_TS / BF_RES)), 'scale': 0.1, 'src': 'NOAA NCEI DEM' if ncei else 'EMODnet DTM'}
+        if ncei:
+            b['bm'] = tile_bitmap(reg.get('_bf_ll') or [], reg['bbox'], BF_TS)
+            if reg.get('shelf'):
+                b['shelf'] = reg['shelf']
+        else:
+            b['tiles'] = bf
+        e['bf'] = b
+        if dck or dpk:
+            e['dl'] = {'ts': DC_TS, 'levels': DC_LEVELS, 'dc': dck, 'dp': dpk, 'src': b['src']}
+    return e
 
 
 # ---------------------------------------------------------------- ana akış
@@ -634,11 +754,32 @@ def run(args):
     out = Path(args.out); out.mkdir(parents=True, exist_ok=True)
     now = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None).replace(minute=0, second=0, microsecond=0)
     t0 = (now - dt.timedelta(days=1)).strftime('%Y-%m-%dT%H:%M:%S'); t1 = (now + dt.timedelta(days=args.days)).strftime('%Y-%m-%dT%H:%M:%S')
-    index = {'v': 1, 'gen': now.strftime('%Y-%m-%dT%H:%MZ'), 'attr': 'E.U. Copernicus Marine Service Information; EMODnet Bathymetry', 'v_fr': 1, 'v_chl': 1, 'regions': []}
+    index = {'v': 1, 'gen': now.strftime('%Y-%m-%dT%H:%MZ'), 'attr': 'E.U. Copernicus Marine Service Information; EMODnet Bathymetry; NOAA NCEI DEM Global Mosaic', 'v_fr': 1, 'v_chl': 1, 'regions': []}
+    cache = Path(args.cache)
+    try:
+        (cache / NEW_MARK).unlink()
+    except Exception:
+        pass
     for reg in regs:
         if not reg.get('on', True) or (args.only and reg['id'] not in args.only.split(',')):
             continue
         log('bölge', reg['id'], reg['bbox'])
+        if reg.get('only_bati'):   # v0.57.10: yalnız derinlik bölgesi (ABD kıyısı): Copernicus yok, ince döşeme + eğri/renk
+            if args.no_bati:
+                continue
+            try:
+                t0r = time.time(); bf = write_fine_bathy(reg, out, cache); dck, dpk = [], []
+                try:
+                    dck, dpk = write_depth_layers(reg, out, cache)
+                except Exception as e:
+                    print('::warning title=Derinlik eğri/renk %s::%s' % (reg['id'], repr(e)[:300]), flush=True)
+                if bf:
+                    index['regions'].append(region_entry(reg, [], {}, False, bf, dck, dpk))
+                sz = sum((out / 'bf' / (k + '.bin')).stat().st_size for k in bf)
+                print('::notice title=Derinlik %s::%d ince döşeme (%.1f MB) · %d eğri · %d renk · %.0f sn' % (reg['id'], len(bf), sz / 1e6, len(dck), len(dpk), time.time() - t0r), flush=True)
+            except Exception as e:
+                print('::warning title=Derinlik %s::%s' % (reg['id'], repr(e)[:300]), flush=True)
+            continue
         try:
             ids = pick_datasets(reg['phy'], 'phy', reg.get('pref')); reg['_ids'] = ids; log('seçilen', ids)
             pad = 0.05; bb = [reg['bbox'][0] - pad, reg['bbox'][1] - pad, reg['bbox'][2] + pad, reg['bbox'][3] + pad]
@@ -710,10 +851,11 @@ def run(args):
                     log('derinlik alınamadı:', e); print('::warning title=Derinlik %s::%s' % (reg['id'], repr(e)[:300]), flush=True)
             tiles = write_region(reg, dsets, out, bati, sat)
             bf = []; dck = []; dpk = []
-            if reg.get('bati') == 'emodnet' and reg.get('bati_ince') and not args.no_bati:
+            if fine_src(reg) and not args.no_bati:
                 try:
                     bf = write_fine_bathy(reg, out, Path(args.cache)); log(reg['id'], len(bf), 'ince derinlik döşemesi')
-                    bf_diag(reg, out, bati)
+                    if fine_src(reg) == 'emodnet':
+                        bf_diag(reg, out, bati)
                     try:
                         dck, dpk = write_depth_layers(reg, out, Path(args.cache)); print('::notice title=Derinlik eğri/renk %s::%d eğri · %d renk döşemesi' % (reg['id'], len(dck), len(dpk)), flush=True)
                     except Exception as e:
@@ -721,9 +863,7 @@ def run(args):
                     print('::notice title=İnce derinlik %s::%d döşeme' % (reg['id'], len(bf)), flush=True)
                 except Exception as e:
                     print('::warning title=İnce derinlik %s::%s' % (reg['id'], repr(e)[:300]), flush=True)
-            index['regions'].append({'id': reg['id'], 'bbox': reg['bbox'], 'tile': reg.get('tile', 0.5), 'tiles': tiles, 'src': ids, 'bati': bool(bati), 'zos_tide': 'MEDSEA' in reg['phy'],
-                                     **({'bf': {'res': BF_RES, 'ts': BF_TS, 'n': int(round(BF_TS / BF_RES)), 'scale': 0.1, 'tiles': bf, 'src': 'EMODnet DTM'}} if bf else {}),
-                                     **({'dl': {'ts': DC_TS, 'levels': DC_LEVELS, 'dc': dck, 'dp': dpk}} if bf and (dck or dpk) else {})})
+            index['regions'].append(region_entry(reg, tiles, ids, bool(bati), bf, dck, dpk))
             log(reg['id'], len(tiles), 'döşeme')
             info = ' · '.join('%s=%s %s' % (k, ids.get(k), dict(d.sizes) if d is not None else '-') for k, d in dsets.items())
             print('::notice title=Deniz %s::%d döşeme · %s · derinlik %s' % (reg['id'], len(tiles), info, 'var' if bati else 'yok'), flush=True)

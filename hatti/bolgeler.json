@@ -1,7 +1,192 @@
 [
-  {"id": "ege", "name": "Ege (İzmir–Çeşme–Seferihisar–Kuşadası)", "bbox": [25.5, 36.5, 28.5, 40.5], "tile": 0.5, "phy": "MEDSEA_ANALYSISFORECAST_PHY_006_013", "bgc": "MEDSEA_ANALYSISFORECAST_BGC_006_014", "sat_chl": "cmems_obs-oc_med_bgc-plankton_nrt_l4-gapfree-multi-1km_P1D", "sat_sst": "SST_MED_SST_L4_NRT_OBSERVATIONS_010_004_c_V2", "bati": "emodnet", "bati_ince": 1, "on": true},
-  {"id": "akdeniz", "name": "Akdeniz (Fethiye–Antalya–Mersin–İskenderun)", "bbox": [28.5, 35.8, 36.3, 37.0], "tile": 0.5, "phy": "MEDSEA_ANALYSISFORECAST_PHY_006_013", "bgc": "MEDSEA_ANALYSISFORECAST_BGC_006_014", "sat_chl": "cmems_obs-oc_med_bgc-plankton_nrt_l4-gapfree-multi-1km_P1D", "sat_sst": "SST_MED_SST_L4_NRT_OBSERVATIONS_010_004_c_V2", "bati": "emodnet", "bati_ince": 1, "on": true},
-  {"id": "marmara", "name": "Marmara (Çanakkale–Tekirdağ–İstanbul–Bandırma)", "bbox": [26.0, 40.2, 30.0, 41.3], "tile": 0.5, "phy": "BLKSEA_ANALYSISFORECAST_PHY_007_001", "bgc": "MEDSEA_ANALYSISFORECAST_BGC_006_014", "sat_chl": "cmems_obs-oc_med_bgc-plankton_nrt_l4-gapfree-multi-1km_P1D", "sat_sst": "SST_MED_SST_L4_NRT_OBSERVATIONS_010_004_c_V2", "bati": "emodnet", "bati_ince": 1, "on": true, "pref": "mrm"},
-  {"id": "karadeniz", "name": "Karadeniz (İstanbul–Sinop–Samsun–Trabzon–Hopa)", "bbox": [28.0, 40.9, 42.0, 42.2], "tile": 0.5, "phy": "BLKSEA_ANALYSISFORECAST_PHY_007_001", "bgc": "BLKSEA_ANALYSISFORECAST_BGC_007_010", "sat_chl": "cmems_obs-oc_blk_bgc-plankton_nrt_l4-gapfree-multi-1km_P1D", "bati": "emodnet", "bati_ince": 1, "on": true, "pref": "2.5km"},
-  {"id": "us-fl", "name": "ABD Florida (Tampa – Keys – Miami)", "bbox": [-83.5, 24.0, -79.5, 28.5], "tile": 0.5, "phy": "GLOBAL_ANALYSISFORECAST_PHY_001_024", "bgc": "GLOBAL_ANALYSISFORECAST_BGC_001_028", "sat_chl": "cmems_obs-oc_glo_bgc-plankton_nrt_l4-gapfree-multi-4km_P1D", "sat_sst": "METOFFICE-GLO-SST-L4-NRT-OBS-SST-V2", "bati": "srtm15", "on": true}
+ {
+  "id": "ege",
+  "name": "Ege (İzmir–Çeşme–Seferihisar–Kuşadası)",
+  "bbox": [
+   25.5,
+   36.5,
+   28.5,
+   40.5
+  ],
+  "tile": 0.5,
+  "phy": "MEDSEA_ANALYSISFORECAST_PHY_006_013",
+  "bgc": "MEDSEA_ANALYSISFORECAST_BGC_006_014",
+  "sat_chl": "cmems_obs-oc_med_bgc-plankton_nrt_l4-gapfree-multi-1km_P1D",
+  "sat_sst": "SST_MED_SST_L4_NRT_OBSERVATIONS_010_004_c_V2",
+  "bati": "emodnet",
+  "bati_ince": 1,
+  "on": true
+ },
+ {
+  "id": "akdeniz",
+  "name": "Akdeniz (Fethiye–Antalya–Mersin–İskenderun)",
+  "bbox": [
+   28.5,
+   35.8,
+   36.3,
+   37.0
+  ],
+  "tile": 0.5,
+  "phy": "MEDSEA_ANALYSISFORECAST_PHY_006_013",
+  "bgc": "MEDSEA_ANALYSISFORECAST_BGC_006_014",
+  "sat_chl": "cmems_obs-oc_med_bgc-plankton_nrt_l4-gapfree-multi-1km_P1D",
+  "sat_sst": "SST_MED_SST_L4_NRT_OBSERVATIONS_010_004_c_V2",
+  "bati": "emodnet",
+  "bati_ince": 1,
+  "on": true
+ },
+ {
+  "id": "marmara",
+  "name": "Marmara (Çanakkale–Tekirdağ–İstanbul–Bandırma)",
+  "bbox": [
+   26.0,
+   40.2,
+   30.0,
+   41.3
+  ],
+  "tile": 0.5,
+  "phy": "BLKSEA_ANALYSISFORECAST_PHY_007_001",
+  "bgc": "MEDSEA_ANALYSISFORECAST_BGC_006_014",
+  "sat_chl": "cmems_obs-oc_med_bgc-plankton_nrt_l4-gapfree-multi-1km_P1D",
+  "sat_sst": "SST_MED_SST_L4_NRT_OBSERVATIONS_010_004_c_V2",
+  "bati": "emodnet",
+  "bati_ince": 1,
+  "on": true,
+  "pref": "mrm"
+ },
+ {
+  "id": "karadeniz",
+  "name": "Karadeniz (İstanbul–Sinop–Samsun–Trabzon–Hopa)",
+  "bbox": [
+   28.0,
+   40.9,
+   42.0,
+   42.2
+  ],
+  "tile": 0.5,
+  "phy": "BLKSEA_ANALYSISFORECAST_PHY_007_001",
+  "bgc": "BLKSEA_ANALYSISFORECAST_BGC_007_010",
+  "sat_chl": "cmems_obs-oc_blk_bgc-plankton_nrt_l4-gapfree-multi-1km_P1D",
+  "bati": "emodnet",
+  "bati_ince": 1,
+  "on": true,
+  "pref": "2.5km"
+ },
+ {
+  "id": "us-fl",
+  "name": "ABD Florida (Tampa – Keys – Miami)",
+  "bbox": [
+   -83.5,
+   24.0,
+   -79.5,
+   28.5
+  ],
+  "tile": 0.5,
+  "phy": "GLOBAL_ANALYSISFORECAST_PHY_001_024",
+  "bgc": "GLOBAL_ANALYSISFORECAST_BGC_001_028",
+  "sat_chl": "cmems_obs-oc_glo_bgc-plankton_nrt_l4-gapfree-multi-4km_P1D",
+  "sat_sst": "METOFFICE-GLO-SST-L4-NRT-OBS-SST-V2",
+  "bati": "srtm15",
+  "on": true,
+  "bati_ince": "ncei",
+  "shelf": 400
+ },
+ {
+  "id": "us-gulf",
+  "name": "ABD Meksika Körfezi (Teksas – Louisiana – Alabama – Florida Panhandle)",
+  "bbox": [
+   -97.6,
+   25.8,
+   -83.5,
+   30.9
+  ],
+  "bati_ince": "ncei",
+  "shelf": 400,
+  "only_bati": true,
+  "on": true
+ },
+ {
+  "id": "us-fln",
+  "name": "ABD Kuzey Florida (Big Bend – Jacksonville)",
+  "bbox": [
+   -83.5,
+   28.5,
+   -79.5,
+   31.0
+  ],
+  "bati_ince": "ncei",
+  "shelf": 400,
+  "only_bati": true,
+  "on": true
+ },
+ {
+  "id": "us-se",
+  "name": "ABD Georgia ve Carolina (Savannah – Charleston – Hatteras)",
+  "bbox": [
+   -82.0,
+   31.0,
+   -75.0,
+   36.6
+  ],
+  "bati_ince": "ncei",
+  "shelf": 400,
+  "only_bati": true,
+  "on": true
+ },
+ {
+  "id": "us-ma",
+  "name": "ABD Orta Atlantik (Chesapeake – Delaware – New Jersey – New York)",
+  "bbox": [
+   -77.6,
+   36.6,
+   -71.8,
+   41.3
+  ],
+  "bati_ince": "ncei",
+  "shelf": 400,
+  "only_bati": true,
+  "on": true
+ },
+ {
+  "id": "us-ne",
+  "name": "ABD New England (Long Island Sound – Cape Cod – Maine)",
+  "bbox": [
+   -74.1,
+   40.4,
+   -66.5,
+   45.3
+  ],
+  "bati_ince": "ncei",
+  "shelf": 400,
+  "only_bati": true,
+  "on": true
+ },
+ {
+  "id": "us-ca",
+  "name": "ABD Kaliforniya (San Diego – Los Angeles – San Francisco)",
+  "bbox": [
+   -124.6,
+   32.4,
+   -117.0,
+   42.0
+  ],
+  "bati_ince": "ncei",
+  "shelf": 400,
+  "only_bati": true,
+  "on": true
+ },
+ {
+  "id": "us-pnw",
+  "name": "ABD Oregon ve Washington (Puget Sound)",
+  "bbox": [
+   -125.0,
+   42.0,
+   -122.0,
+   49.1
+  ],
+  "bati_ince": "ncei",
+  "shelf": 400,
+  "only_bati": true,
+  "on": true
+ }
 ]
