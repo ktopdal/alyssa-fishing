@@ -713,6 +713,16 @@ def bathy_erddap(bbox, cache):
         z = np.load(f); return {k: z[k] for k in ('lat', 'lon', 'z', 'slope')} | {'res': float(z['res']), 'src': str(z['src'])}
     import urllib.request
     lo0, la0, lo1, la1 = bbox
+    # v0.58.06: önce NOAA NCEI DEM mozaiği (aynı ~460 m ızgara; ERDDAP geniş kutularda 403 veriyordu: Körfez, Carolina, New England)
+    try:
+        nx = int(round((lo1 - lo0) / B_RES)); ny = int(round((la1 - la0) / B_RES))
+        log('derinlik indiriliyor NOAA NCEI DEM', nx, 'x', ny)
+        b = bathy_from_tif(ncei_export(bbox, nx, ny, timeout=300), B_RES); b['src'] = 'NOAA NCEI DEM'
+        cache.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(f, lat=b['lat'], lon=b['lon'], z=b['z'], slope=b['slope'], res=b['res'], src=b['src']); mark_new(cache)
+        return b
+    except Exception as e:
+        log('NOAA NCEI DEM olmadı:', e)
     tries = [('https://coastwatch.pfeg.noaa.gov/erddap/griddap/srtm15plus.geotif?z%%5B(%f):1:(%f)%%5D%%5B(%f):1:(%f)%%5D' % (la0, la1, lo0, lo1), 1 / 240, 'SRTM15+ (NOAA ERDDAP)'),
              ('https://coastwatch.pfeg.noaa.gov/erddap/griddap/etopo180.geotif?altitude%%5B(%f):1:(%f)%%5D%%5B(%f):1:(%f)%%5D' % (la0, la1, lo0, lo1), 1 / 60, 'ETOPO1 (NOAA ERDDAP)')]
     err = None
