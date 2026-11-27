@@ -30,7 +30,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .cache/deniz
-          key: bati-v1-${{ hashFiles('hatti/bolgeler.json') }}
+          key: bati-v2-${{ github.run_id }}
+          restore-keys: |
+            bati-v2-
+            bati-v1-
       - name: Son deniz verisi (yedek)
         uses: actions/cache/restore@v4
         with:

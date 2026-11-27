@@ -70,7 +70,7 @@ def nearest_levels(depths, want):
 
 
 # ---------------------------------------------------------------- Copernicus: ürünün veri setlerini bul
-def pick_datasets(product_id, want='phy'):
+def pick_datasets(product_id, want='phy', pref=None):
     import copernicusmarine as cm
     cat = cm.describe(product_id=product_id, disable_progress_bar=True)
     found = {}
@@ -88,6 +88,8 @@ def pick_datasets(product_id, want='phy'):
 
     def best(var, prefs):
         cands = [d for d, vs in found.items() if var in vs and 'detided' not in d]
+        if pref:   # v0.57.05: bölgenin tercihi önce (Karadeniz 2,5 km; Marmara 'mrm' 500 m alt alanı)
+            prefs = [tuple([pref]) + tuple(p) for p in prefs] + [(pref,)] + list(prefs)
         for pat in prefs:
             for d in cands:
                 if all(x in d for x in pat):
@@ -328,6 +330,14 @@ def bathy_emodnet(bbox, cache):
     f = cache / ('bati_%s.npz' % '_'.join('%.2f' % x for x in bbox))
     if f.exists():
         z = np.load(f); return {'lat': z['lat'], 'lon': z['lon'], 'z': z['z'], 'slope': z['slope']}
+    if bbox[2] - bbox[0] > 4.5:   # v0.57.05: geniş bölge (Karadeniz 14°) tek istekte gelmiyor; 4°'lik dilimlerle alınıp yan yana konur
+        cuts = list(np.arange(bbox[0], bbox[2], 4.0)) + [bbox[2]]
+        parts = [bathy_emodnet([float(a), bbox[1], float(b), bbox[3]], cache) for a, b in zip(cuts[:-1], cuts[1:])]
+        ny = min(p['z'].shape[0] for p in parts)
+        out = {'lat': parts[0]['lat'][:ny], 'lon': np.concatenate([p['lon'] for p in parts]),
+               'z': np.hstack([p['z'][:ny] for p in parts]), 'slope': np.hstack([p['slope'][:ny] for p in parts])}
+        cache.mkdir(parents=True, exist_ok=True); np.savez_compressed(f, **out)
+        return out
     import io, urllib.request
     import rasterio
     lo0, la0, lo1, la1 = bbox
@@ -372,13 +382,13 @@ def bathy_fine_chunk(la0, lo0, cache, step=1.0):
            '&BBOX=%f,%f,%f,%f&format=image/tiff&resx=%.10f&resy=%.10f' % (lo0, la0, lo0 + step, la0 + step, BF_RES, BF_RES))
     log('EMODnet ince', la0, lo0)
     last = None
-    for k in range(2):
+    for k in range(4):   # v0.57.05: EMODnet 502/504 verebiliyor; 4 deneme, artan bekleme
         try:
-            with urllib.request.urlopen(url, timeout=120) as r:
+            with urllib.request.urlopen(url, timeout=150) as r:
                 data = r.read()
             break
         except Exception as e:
-            last = e; time.sleep(5 * (k + 1))
+            last = e; time.sleep(10 * (k + 1))
     else:
         raise last
     B = bathy_from_tif(data, BF_RES)
@@ -630,7 +640,7 @@ def run(args):
             continue
         log('bölge', reg['id'], reg['bbox'])
         try:
-            ids = pick_datasets(reg['phy']); reg['_ids'] = ids; log('seçilen', ids)
+            ids = pick_datasets(reg['phy'], 'phy', reg.get('pref')); reg['_ids'] = ids; log('seçilen', ids)
             pad = 0.05; bb = [reg['bbox'][0] - pad, reg['bbox'][1] - pad, reg['bbox'][2] + pad, reg['bbox'][3] + pad]
             dsets = {}
             dsets['temp'] = open_sub(ids['temp'], ['thetao'], bb, t0, t1, 110) if ids.get('temp') else None
@@ -646,7 +656,7 @@ def run(args):
             dsets['chl'] = None
             if reg.get('bgc'):
                 try:
-                    bi = pick_datasets(reg['bgc'], 'bgc'); ids.update(bi); log('klorofil', bi)
+                    bi = pick_datasets(reg['bgc'], 'bgc', reg.get('pref_bgc')); ids.update(bi); log('klorofil', bi)
                     if bi.get('chl'):
                         dsets['chl'] = open_sub(bi['chl'], ['chl'], bb, t0, t1, 2)
                     if bi.get('o2'):
