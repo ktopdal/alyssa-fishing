@@ -94,7 +94,9 @@ def pick_datasets(product_id, want='phy'):
                     return d
         return cands[0] if cands else None
     if want == 'bgc':
-        return {'chl': best('chl', [('pft', 'P1D'), ('P1D',)]), 'o2': best('o2', [('bio', 'P1D'), ('P1D',)])}   # v0.56.07: çözünmüş oksijen
+        return {'chl': best('chl', [('pft', 'P1D'), ('P1D',)]), 'o2': best('o2', [('bio', 'P1D'), ('P1D',)]),   # v0.56.07: çözünmüş oksijen
+                'kd': best('kd490', [('optics', 'P1D'), ('P1D',)]),    # v0.57.03 (Kenny, Fish Radar kıyası): su berraklığı (ışık sönümü, 1/m)
+                'zoo': best('zooc', [('plankton', 'P1D'), ('pft', 'P1D'), ('P1D',)])}   # v0.57.03: zooplankton (karbon, mmol/m³)
     return {
         'temp': best('thetao', [('P1D',), ('PT1H',)]),
         'cur': best('uo', [('3D', 'PT1H'), ('PT6H',), ('PT1H',), ('P1D',)]),   # MED: 3B saatlik · GLO: 3B 6 saatlik
@@ -280,7 +282,7 @@ def write_region(reg, dsets, out, bati=None, sat=None):
                 t = d['time'].values
                 rec['zos'] = {'t0': ms(t[0]), 'dt': ms(t[1]) - ms(t[0]) if len(t) > 1 else 3600000, 'nt': int(a.shape[0]), 's': 0.001, 'd': b64i16(a, 0.001)}
                 rec['src']['zos'] = reg['_ids'].get('zos')
-        for k, var, sc in (('sal', 'so', 0.01), ('mld', 'mlotst', 0.1), ('o2', 'o2', 0.1)):   # v0.56.07: kendi ızgarasında günlük yüzey alanları
+        for k, var, sc in (('sal', 'so', 0.01), ('mld', 'mlotst', 0.1), ('o2', 'o2', 0.1), ('kd', 'kd490', 0.001), ('zoo', 'zooc', 0.001)):   # v0.56.07 / v0.57.03: kendi ızgarasında günlük yüzey alanları
             d = dsets.get(k)
             if d is None:
                 continue
@@ -634,7 +636,7 @@ def run(args):
             dsets['temp'] = open_sub(ids['temp'], ['thetao'], bb, t0, t1, 110) if ids.get('temp') else None
             dsets['cur'] = open_sub(ids['cur'], ['uo', 'vo'], bb, t0, t1, 55) if ids.get('cur') else None
             dsets['zos'] = open_sub(ids['zos'], ['zos'], bb, t0, t1) if ids.get('zos') else None
-            dsets['sal'] = None; dsets['mld'] = None; dsets['o2'] = None
+            dsets['sal'] = None; dsets['mld'] = None; dsets['o2'] = None; dsets['kd'] = None; dsets['zoo'] = None
             for k, var, zmx in (('sal', 'so', 2), ('mld', 'mlotst', None)):   # v0.56.07: tuzluluk ve karışım tabakası; alınamazsa öteki veri etkilenmez
                 if ids.get(k):
                     try:
@@ -652,6 +654,18 @@ def run(args):
                             dsets['o2'] = open_sub(bi['o2'], ['o2'], bb, t0, t1, 2)
                         except Exception as e:
                             print('::warning title=o2 %s::%s' % (reg['id'], repr(e)[:200]), flush=True)
+                    for k, var in (('kd', 'kd490'), ('zoo', 'zooc')):   # v0.57.03: berraklık ve zooplankton; alınamazsa öteki veri etkilenmez
+                        if bi.get(k):
+                            try:
+                                try:
+                                    dsets[k] = open_sub(bi[k], [var], bb, t0, t1, 2)
+                                except Exception:
+                                    dsets[k] = open_sub(bi[k], [var], bb, t0, t1)   # yüzey alanı (derinlik boyutu yok)
+                                print('::notice title=%s %s::%s' % (k, reg['id'], bi[k]), flush=True)
+                            except Exception as e:
+                                print('::warning title=%s %s::%s' % (k, reg['id'], repr(e)[:200]), flush=True)
+                        else:
+                            print('::notice title=%s %s::veri setinde %s yok' % (k, reg['id'], var), flush=True)
                 except Exception as e:
                     log('klorofil alınamadı:', e); print('::warning title=Klorofil %s::%s' % (reg['id'], repr(e)[:300]), flush=True)
             for k, d in dsets.items():
